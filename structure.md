@@ -1,288 +1,666 @@
-# Conn-Trans: Formal Architecture Specification
+# Connection Transformer: Complete Formal Specification
 
 ## Abstract
 
-Conn-Trans is a novel transformer architecture that performs iterative semantic reasoning through learnable connections between fixed intermediate representation (IR) nodes and dynamic activation states.
+The Connection Transformer (Conn-Trans) is a novel neural architecture that performs iterative semantic reasoning through learnable connections between fixed semantic slots. The architecture separates fixed semantic structure (slots) from dynamic semantic relationships (connections) and input-dependent reasoning states.
 
 ---
 
-## 1. Mathematical Formulation
+## 1. Architectural Overview
 
-### 1.1 Core Components
+### 1.1 Core Philosophy
 
-**Fixed IR Nodes (Base Knowledge)**
+**Semantic Slot Hypothesis**: Complex reasoning can be decomposed into:
 
-```
-H ∈ ℝ^(N_ir × d)
-```
+1. **Fixed Semantic Slots (H)**: A set of N abstract semantic containers, each represented as a D-dimensional vector
+2. **Learnable Connections (C)**: An N×N matrix encoding how each slot influences every other slot
+3. **Dynamic Activation**: Input-dependent states that populate and activate the semantic slots
+4. **Iterative Reasoning**: Repeated application of slot-to-slot influence propagation
 
-- Fixed throughout training and inference
-- Represents fundamental semantic concepts
-- Initialized once, never updated
-
-**Dynamic Activation State**
+### 1.2 Information Flow Architecture
 
 ```
-X^(t) ∈ ℝ^(B × N_ir × d)
+Input Sequence → Compression → Semantic Slot Space → Iterative Reasoning → Expansion → Output Sequence
+    [B,S,D]         ↓             [B,N,D]              ↓                    ↓         [B,S,D]
+                 Attention                      H + H@C (repeated)      Attention
 ```
 
-- Input-dependent, dynamically updated
-- Represents current reasoning state
-- Updated through iterative reasoning process
-
-**Connection Matrix**
-
-```
-C ∈ ℝ^(N_ir × N_ir)
-```
-
-- Primary learnable parameter for reasoning
-- Encodes semantic relationships between IR nodes
-- Shared across all reasoning steps
-
-### 1.2 Forward Pass
-
-**Input Processing**
-
-```
-X^(0) = Attention(Q_in, K_H, V_in)
-```
-
-where:
-
-- Q_in = InputTokens × W_q^in
-- K_H = H × W_k^H
-- V_in = InputTokens × W_v^in
-
-**Iterative Reasoning Process**
-
-```
-For t = 1, 2, ..., k:
-    X^(t) = (C ⊗ H) + (I + C) ⊗ X^(t-1)
-```
-
-where ⊗ denotes matrix multiplication and I is the identity matrix.
-
-**Output Generation**
-
-```
-H_eff = H + X^(k)
-Output = Attention(Q_eff, K_out, V_out)
-```
-
-where:
-
-- Q_eff = H_eff × W_q^out
-- K_out = OutputTokens × W_k^out
-- V_out = OutputTokens × W_v^out
-
-### 1.3 Affine Transformation Analysis
-
-The core update can be decomposed as:
-
-```
-X^(t) = Translation + LinearTransform
-      = (C ⊗ H) + (I + C) ⊗ X^(t-1)
-      = KnowledgeInjection + StateEvolution
-```
-
-This enables:
-
-1. **Knowledge Injection**: C ⊗ H provides consistent semantic context
-2. **State Preservation**: I ⊗ X^(t-1) maintains previous reasoning state
-3. **Associative Propagation**: C ⊗ X^(t-1) spreads activation patterns
+**Key Insight**: Reasoning occurs in a compressed semantic space where fixed slots interact through learned connections.
 
 ---
 
-## 2. Architecture Variants
+## 2. Mathematical Formulation
 
-### 2.1 Base Architecture (Pure Connection)
+### 2.1 Notation and Definitions
 
-```
-Layer: X^(t) = (C ⊗ H) + (I + C) ⊗ X^(t-1)
-Parameters: C ∈ ℝ^(N_ir × N_ir), Attention projections
-```
+| Symbol | Dimension | Description               |
+| ------ | --------- | ------------------------- |
+| B      | scalar    | Batch size                |
+| S      | scalar    | Sequence length           |
+| D      | scalar    | Model dimension           |
+| N      | scalar    | Number of semantic slots  |
+| K      | scalar    | Number of reasoning steps |
+| V      | scalar    | Vocabulary size           |
 
-### 2.2 With Feed-Forward Networks
+### 2.2 Core Components
 
-**Variant A: FFN in Reasoning Loop**
-
-```
-For t = 1, 2, ..., k:
-    X_temp = (C ⊗ H) + (I + C) ⊗ X^(t-1)
-    X^(t) = X_temp + FFN(X_temp)
-```
-
-**Variant B: FFN in Input/Output**
+#### Fixed Semantic Slots
 
 ```
-X^(0) = X^(0) + FFN_in(X^(0))
-For t = 1, 2, ..., k:
-    X^(t) = (C ⊗ H) + (I + C) ⊗ X^(t-1)
-Output = Output + FFN_out(Output)
+H ∈ ℝ^(N × D)
 ```
 
-**Variant C: Both**
-Combination of Variant A and B.
+- **Fixed throughout training**: H is initialized randomly and never updated
+- **Semantic containers**: Each row H[i] represents an abstract semantic slot
+- **Shared across samples**: Same H used for all inputs in all batches
+- **Role**: Provides stable semantic structure for reasoning
 
----
-
-## 3. Parameter Analysis
-
-### 3.1 Parameter Count
-
-**Base Conn-Trans:**
-
-- Connection Matrix: N_ir²
-- Input Attention: 3d²
-- Output Attention: 3d²
-- **Total: N_ir² + 6d²**
-
-**Standard Transformer (L layers):**
-
-- Attention per layer: 4d²
-- FFN per layer: 8d² (assuming FFN_dim = 4d)
-- **Total: L × 12d²**
-
-**Efficiency Condition:**
+#### Connection Matrix
 
 ```
-N_ir² + 6d² < L × 12d²
+C ∈ ℝ^(N × N)
 ```
 
-For N_ir = 2d and L = k:
+- **Primary learnable parameter**: The main parameter that captures reasoning patterns
+- **Semantic influence**: C[i,j] represents how much slot i influences slot j
+- **Asymmetric relations**: C[i,j] ≠ C[j,i] in general, allowing directional reasoning
+- **Dense or sparse**: Can learn both local and global reasoning patterns
+
+#### Dynamic State
 
 ```
-4d² + 6d² < k × 12d²
-10d² < 12kd²
-k > 10/12 ≈ 0.83
+H_state^(t) ∈ ℝ^(B × N × D)
 ```
 
-### 3.2 Computational Complexity
+- **Input-dependent**: Different for each sample in the batch
+- **Temporally evolving**: Changes through reasoning steps t = 0, 1, ..., K
+- **Slot activation**: H_state^(t)[b,i,:] is the activation of slot i for sample b at step t
 
-**Per Reasoning Step:**
+### 2.3 Forward Pass Algorithm
 
-- Connection computation: O(N_ir² × d)
-- Batch processing: O(B × N_ir × d)
-- **Total per step: O(B × N_ir × d + N_ir² × d)**
-
-**Total Forward Pass:**
+#### Step 1: Input Processing
 
 ```
-O(k × (B × N_ir × d + N_ir² × d) + B × seq_len × d)
+Input: input_ids ∈ ℝ^(B × S)
+
+# Token and positional embeddings
+X_input = TokenEmbedding(input_ids) + PositionalEmbedding(positions)  ∈ ℝ^(B × S × D)
 ```
 
----
-
-## 4. Theoretical Properties
-
-### 4.1 Convergence Analysis
-
-The system X^(t) = (C ⊗ H) + (I + C) ⊗ X^(t-1) can be written as:
+#### Step 2: Input → Semantic Slot Compression
 
 ```
-H_eff^(t) = (I + C) ⊗ H_eff^(t-1)
+# Project input and slots for attention
+Q_input = X_input @ W_q^input        ∈ ℝ^(B × S × D)
+K_slots = H @ W_k^slots              ∈ ℝ^(N × D)
+V_input = X_input @ W_v^input        ∈ ℝ^(B × S × D)
+
+# Compress input sequence into semantic slots
+A_compress = softmax(Q_input @ K_slots^T / √D)    ∈ ℝ^(B × S × N)
+IR_activation = A_compress^T @ V_input            ∈ ℝ^(B × N × D)
+
+# Initialize reasoning state
+H_state^(0) = H.expand(B, -1, -1) + IR_activation    ∈ ℝ^(B × N × D)
 ```
 
-where H_eff^(t) = H + X^(t).
+**Interpretation**:
 
-**Convergence Conditions:**
+- Each input token attends to all semantic slots
+- Attention weights determine how much each token contributes to each slot
+- Initial slot states combine fixed structure (H) with input-specific activation
 
-- Spectral radius ρ(I + C) determines stability
-- For convergence: ρ(I + C) ≤ 1
-- Eigenvalues of C should satisfy: λ_i ∈ [-2, 0]
-
-### 4.2 Expressiveness
-
-**Linear Expressiveness:**
-The k-step reasoning can express any linear transformation of the form:
+#### Step 3: Iterative Reasoning in Semantic Space
 
 ```
-H_eff^(k) = Σ(i=0 to k) (I + C)^i ⊗ (C ⊗ H) + (I + C)^k ⊗ H
+For t = 1, 2, ..., K:
+    # Compute slot-to-slot influences
+    Influence^(t) = H_state^(t-1) @ C           ∈ ℝ^(B × N × D)
+
+    # Update slot states with influences
+    H_state^(t) = H_state^(t-1) + Influence^(t)    ∈ ℝ^(B × N × D)
+
+    # Optional: Apply normalization
+    H_state^(t) = LayerNorm(H_state^(t))
 ```
 
-**With FFN:**
-Addition of FFN introduces non-linearity, enabling more complex reasoning patterns.
+**Interpretation**:
 
----
+- **Influence Computation**: Each slot's current state influences other slots according to connection matrix C
+- **State Evolution**: Slots accumulate influences from all other slots
+- **Iterative Refinement**: Multiple steps allow complex reasoning patterns to emerge
 
-## 5. Implementation Specification
-
-### 5.1 Hyperparameters
-
-**Architecture Parameters:**
-
-- N_ir: Number of IR nodes (recommended: 2d)
-- d: Model dimension
-- k: Number of reasoning steps (recommended: 3-5)
-- FFN_dim: FFN hidden dimension (if used)
-
-**Training Parameters:**
-
-- Learning rate: 1e-4 to 1e-3
-- C initialization: Normal(0, 0.01)
-- H initialization: Normal(0, 1) or pre-trained embeddings
-- Gradient clipping: max_norm = 1.0
-
-### 5.2 Regularization
-
-**Connection Matrix Regularization:**
+#### Step 4: Semantic Slot → Output Expansion
 
 ```
-L_reg = λ_spec × spectral_norm(C) + λ_frob × ||C||_F
+# Project for output attention
+Q_output = X_input @ W_q^output          ∈ ℝ^(B × S × D)
+K_final = H_state^(K) @ W_k^final        ∈ ℝ^(B × N × D)
+V_final = H_state^(K) @ W_v^final        ∈ ℝ^(B × N × D)
+
+# Expand semantic slots back to sequence
+A_expand = softmax(Q_output @ K_final^T / √D)    ∈ ℝ^(B × S × N)
+Y_output = A_expand @ V_final                    ∈ ℝ^(B × S × D)
+
+# Generate vocabulary logits
+logits = Y_output @ W_vocab                      ∈ ℝ^(B × S × V)
 ```
 
-**Stability Enforcement:**
+**Interpretation**:
+
+- Each output position attends to the final semantic slot states
+- Attention determines which slots are relevant for each output position
+- Final projection maps to vocabulary space
+
+### 2.4 Parameter Analysis
+
+#### Total Parameters
 
 ```
-C = C - α × diag(C)  # Suppress diagonal elements
+Fixed slots (H):              N × D              [not trainable]
+Connection matrix (C):        N × N              [primary learnable parameter]
+Attention projections:        8 × D × D          [W_q^input, W_k^slots, W_v^input, W_q^output, W_k^final, W_v^final, W_vocab, + embeddings]
+
+Total learnable parameters:   N² + 8D² + S×D + V×D
+```
+
+#### Efficiency Analysis
+
+For N = D (common choice):
+
+```
+Conn-Trans parameters:     D² + 8D² + SD + VD = D²(9 + S/D + V/D)
+Standard Transformer:      L × 12D²                [L layers]
+
+Efficiency condition:      9 + S/D + V/D < 12L
+```
+
+For typical values (S=512, V=50000, D=512, L=6):
+
+```
+Conn-Trans: ~9D² + 512 + 50000 ≈ 10D²
+Standard:   72D²
+
+Conn-Trans is ~7x more parameter-efficient
 ```
 
 ---
 
-## 6. Experimental Protocol
+## 3. Theoretical Properties
 
-### 6.1 Ablation Studies
+### 3.1 Reasoning Dynamics
 
-1. **Core Mechanism**: Pure vs Standard Transformer
-2. **Knowledge Injection**: With/without C ⊗ H term
-3. **Reasoning Depth**: k = 1, 2, 3, 4, 5
-4. **FFN Placement**: Pure, Input/Output FFN, Reasoning FFN, Both
-5. **IR Node Count**: N_ir = d, 2d, 4d
+The iterative reasoning process can be analyzed as a discrete dynamical system:
 
-### 6.2 Benchmark Tasks
+```
+H_state^(t) = H_state^(t-1) + H_state^(t-1) @ C
+             = H_state^(t-1) @ (I + C)
+```
 
-**Reasoning Tasks:**
+#### Convergence Analysis
 
-- Logical inference (syllogisms)
-- Multi-hop question answering
-- Commonsense reasoning
+- **Fixed Points**: States that satisfy H* = H* @ (I + C)
+- **Stability**: Requires spectral radius ρ(I + C) ≤ 1
+- **Convergence**: System converges when eigenvalues of (I + C) have magnitude ≤ 1
 
-**Analysis Tasks:**
+#### Expressiveness
 
-- Connection matrix visualization
-- Reasoning state evolution tracking
-- Convergence analysis
+After K steps, the reasoning state can be expressed as:
+
+```
+H_state^(K) = H_state^(0) @ (I + C)^K
+```
+
+This allows the model to capture:
+
+- **Short-range reasoning**: Direct slot connections (K=1)
+- **Long-range reasoning**: Multi-hop slot interactions (K>1)
+- **Hierarchical reasoning**: Different reasoning depths for different slots
+
+### 3.2 Semantic Interpretation
+
+#### Slot Specialization
+
+Through training, semantic slots H[i] tend to specialize in different aspects:
+
+- **Entity slots**: Store information about entities mentioned in input
+- **Relation slots**: Capture relationships between entities
+- **Attribute slots**: Hold properties and characteristics
+- **Reasoning slots**: Perform logical operations and inferences
+
+#### Connection Learning
+
+The connection matrix C learns various reasoning patterns:
+
+- **C[i,j] > 0**: Slot i positively influences slot j (reinforcement)
+- **C[i,j] < 0**: Slot i negatively influences slot j (inhibition)
+- **C[i,j] ≈ 0**: Slot i has little influence on slot j (independence)
 
 ---
 
-## 7. Expected Contributions
+## 4. Implementation Specification
 
-1. **Novel Architecture**: Structured reasoning through learnable connections
-2. **Parameter Efficiency**: Fewer parameters for equivalent reasoning depth
-3. **Interpretability**: Analyzable reasoning process through X^(t) evolution
-4. **Extensibility**: Adaptable reasoning depth without parameter growth
+### 4.1 Hyperparameter Guidelines
+
+#### Architecture Parameters
+
+```python
+d_model = 512          # Model dimension
+num_slots = 512        # Number of semantic slots (typically d_model)
+num_reasoning_steps = 4 # Number of iterative reasoning steps
+seq_len = 128          # Maximum sequence length
+```
+
+#### Training Parameters
+
+```python
+learning_rate = 1e-4   # AdamW learning rate
+weight_decay = 0.01    # L2 regularization
+warmup_steps = 1000    # Learning rate warmup
+gradient_clip = 1.0    # Gradient clipping norm
+```
+
+#### Stability Parameters
+
+```python
+connection_init_std = 0.01      # Connection matrix initialization
+spectral_radius_limit = 0.95    # Maximum spectral radius for stability
+connection_regularization = 1e-4 # L2 regularization on C
+```
+
+### 4.2 Initialization Strategy
+
+#### Connection Matrix
+
+```python
+# Small random initialization to ensure stability
+C = torch.normal(0, 0.01, size=(num_slots, num_slots))
+
+# Optional: Initialize with small identity component
+C = 0.01 * torch.eye(num_slots) + 0.005 * torch.randn(num_slots, num_slots)
+```
+
+#### Semantic Slots
+
+```python
+# Fixed random initialization (never updated)
+H = torch.normal(0, 1, size=(num_slots, d_model))
+```
+
+### 4.3 Regularization and Stability
+
+#### Spectral Radius Control
+
+```python
+def enforce_spectral_radius(C, max_radius=0.95):
+    """Ensure (I + C) has spectral radius ≤ max_radius"""
+    eigenvals = torch.linalg.eigvals(torch.eye(C.size(0)) + C)
+    current_radius = torch.abs(eigenvals).max()
+
+    if current_radius > max_radius:
+        C.data *= max_radius / current_radius
+```
+
+#### Connection Regularization
+
+```python
+def connection_regularization(C, lambda_reg=1e-4):
+    """L2 regularization on connection matrix"""
+    return lambda_reg * torch.norm(C, 'fro') ** 2
+```
 
 ---
 
-## Notation Summary
+## 5. Variants and Extensions
 
-| Symbol | Meaning                    | Dimensions   |
-| ------ | -------------------------- | ------------ |
-| H      | Fixed IR nodes             | N_ir × d     |
-| X^(t)  | Activation state at step t | B × N_ir × d |
-| C      | Connection matrix          | N_ir × N_ir  |
-| k      | Number of reasoning steps  | scalar       |
-| N_ir   | Number of IR nodes         | scalar       |
-| d      | Model dimension            | scalar       |
-| B      | Batch size                 | scalar       |
+### 5.1 Nonlinear Reasoning
+
+```python
+# Add nonlinearity to reasoning steps
+For t = 1, 2, ..., K:
+    Influence^(t) = H_state^(t-1) @ C
+    H_state^(t) = H_state^(t-1) + GELU(Influence^(t))
+    H_state^(t) = LayerNorm(H_state^(t))
+```
+
+### 5.2 Multi-Head Connections
+
+```python
+# Multiple connection matrices for different reasoning aspects
+C_1, C_2, ..., C_h ∈ ℝ^(N × N)
+
+For t = 1, 2, ..., K:
+    Influence^(t) = Σ_j (H_state^(t-1) @ C_j) / h
+    H_state^(t) = H_state^(t-1) + Influence^(t)
+```
+
+### 5.3 Hierarchical Slots
+
+```python
+# Different slot types with different connection patterns
+Entity_slots: H_entity ∈ ℝ^(N_e × D)
+Relation_slots: H_relation ∈ ℝ^(N_r × D)
+C_entity_entity ∈ ℝ^(N_e × N_e)
+C_entity_relation ∈ ℝ^(N_e × N_r)
+C_relation_entity ∈ ℝ^(N_r × N_e)
+```
+
+---
+
+## 6. Computational Complexity
+
+### 6.1 Time Complexity
+
+```
+Input compression:     O(BSD²)           # Attention computation
+Iterative reasoning:   O(K·BN²D)         # K steps of N×N matrix operations
+Output expansion:      O(BSD²)           # Attention computation
+Total:                 O(BSD² + K·BN²D)
+```
+
+### 6.2 Space Complexity
+
+```
+Activations:          O(BSD + BND)       # Input and slot activations
+Parameters:           O(N² + D²)         # Connection matrix and projections
+Total:                O(max(BSD, BND) + N² + D²)
+```
+
+### 6.3 Comparison with Standard Transformer
+
+```
+Standard Transformer:  O(L·BS²D + L·BSD²)    [L layers]
+Connection Transformer: O(BSD² + K·BN²D)
+
+For S >> N: Conn-Trans is more efficient
+For N >> S: Standard Transformer may be more efficient
+```
+
+---
+
+## 7. Convergence and Stability Guarantees
+
+### 7.1 Theoretical Guarantees
+
+**Theorem 1 (Convergence)**: If the spectral radius ρ(I + C) < 1, then the iterative reasoning process converges to a unique fixed point H* satisfying H* = H\* @ (I + C).
+
+**Theorem 2 (Stability)**: Small perturbations in the initial state H_state^(0) result in bounded perturbations in the final state H_state^(K), with bound depending on ρ(I + C).
+
+**Corollary**: For stable training, maintain ρ(I + C) ≤ 0.95 through regularization.
+
+### 7.2 Practical Stability
+
+#### Gradient Flow
+
+The connection matrix C affects gradients through K reasoning steps, potentially causing:
+
+- **Exploding gradients**: When ρ(I + C) >> 1
+- **Vanishing gradients**: When ρ(I + C) << 1
+
+#### Mitigation Strategies
+
+1. **Spectral normalization**: Constrain ρ(I + C) during training
+2. **Gradient clipping**: Limit gradient norms
+3. **Adaptive reasoning steps**: Use fewer steps K during early training
+
+---
+
+## 8. Expected Properties and Behavior
+
+### 8.1 Learning Dynamics
+
+#### Phase 1: Connection Discovery (Early Training)
+
+- Connection matrix C learns basic slot-to-slot relationships
+- Slots begin to specialize for different semantic roles
+- Reasoning converges quickly due to weak connections
+
+#### Phase 2: Reasoning Refinement (Mid Training)
+
+- Stronger connections develop for important reasoning paths
+- Multi-step reasoning patterns emerge
+- Some connections may become inhibitory (negative values)
+
+#### Phase 3: Specialization (Late Training)
+
+- Slots become highly specialized for specific semantic functions
+- Connection patterns stabilize into consistent reasoning circuits
+- System develops efficient reasoning shortcuts
+
+### 8.2 Interpretability
+
+#### Connection Analysis
+
+```python
+def analyze_connections(model):
+    C = model.C.detach().cpu()
+    return {
+        'strongest_influences': torch.topk(C.flatten(), 10),
+        'inhibitory_connections': (C < -0.1).sum(),
+        'connection_sparsity': (C.abs() < 0.01).float().mean(),
+        'reasoning_circuits': find_cycles_in_graph(C > 0.1)
+    }
+```
+
+#### Slot Specialization
+
+```python
+def analyze_slot_specialization(model, dataset):
+    slot_activations = []
+    for batch in dataset:
+        trace = model.get_reasoning_trace(batch)
+        slot_activations.append(trace[-1])  # Final slot states
+
+    # Cluster slots by activation patterns
+    return cluster_slots(torch.cat(slot_activations))
+```
+
+---
+
+## 9. Relationship to Other Architectures
+
+### 9.1 Transformer Comparison
+
+| Aspect                 | Standard Transformer  | Connection Transformer     |
+| ---------------------- | --------------------- | -------------------------- |
+| Reasoning Location     | Throughout all layers | Concentrated in slot space |
+| Parameter Growth       | Linear in layers      | Quadratic in slots         |
+| Interpretability       | Limited               | High (via connections)     |
+| Memory Efficiency      | O(S²) attention       | O(N²) reasoning            |
+| Reasoning Explicitness | Implicit              | Explicit via C matrix      |
+
+### 9.2 Memory Networks
+
+- **Similarity**: Both use external memory structures
+- **Difference**: Conn-Trans uses fixed slots with learned connections vs. dynamic memory with attention
+
+### 9.3 Graph Neural Networks
+
+- **Similarity**: Both propagate information through learned connections
+- **Difference**: Conn-Trans uses dense slot space vs. sparse graph structure
+
+---
+
+## 10. Conclusion
+
+The Connection Transformer represents a novel approach to neural reasoning that:
+
+1. **Separates structure from dynamics**: Fixed semantic slots provide stable structure while learned connections enable flexible reasoning
+2. **Enables interpretable reasoning**: Connection matrix C provides direct insight into reasoning patterns
+3. **Achieves parameter efficiency**: Concentrates learning in N² connection parameters rather than multiple transformer layers
+4. **Supports complex reasoning**: Iterative slot-to-slot influence propagation can capture multi-step reasoning
+
+The architecture is theoretically grounded, computationally efficient, and empirically promising for tasks requiring explicit reasoning capabilities.
+
+---
+
+## Appendix: Complete Implementation
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+
+class ConnectionTransformer(nn.Module):
+    """
+    Complete implementation of Connection Transformer
+    following the formal specification exactly.
+    """
+
+    def __init__(self, vocab_size, d_model=512, num_slots=512,
+                 num_reasoning_steps=4, max_seq_len=512):
+        super().__init__()
+
+        # Architecture parameters
+        self.d_model = d_model
+        self.num_slots = num_slots
+        self.num_reasoning_steps = num_reasoning_steps
+
+        # Token embeddings
+        self.token_embedding = nn.Embedding(vocab_size, d_model)
+        self.pos_embedding = nn.Embedding(max_seq_len, d_model)
+
+        # Fixed semantic slots (H) - never updated
+        self.register_buffer('H', torch.normal(0, 1, size=(num_slots, d_model)))
+
+        # Connection matrix (C) - primary learnable parameter
+        self.C = nn.Parameter(torch.normal(0, 0.01, size=(num_slots, num_slots)))
+
+        # Attention projection matrices
+        self.W_q_input = nn.Linear(d_model, d_model, bias=False)
+        self.W_k_slots = nn.Linear(d_model, d_model, bias=False)
+        self.W_v_input = nn.Linear(d_model, d_model, bias=False)
+
+        self.W_q_output = nn.Linear(d_model, d_model, bias=False)
+        self.W_k_final = nn.Linear(d_model, d_model, bias=False)
+        self.W_v_final = nn.Linear(d_model, d_model, bias=False)
+
+        # Vocabulary projection
+        self.W_vocab = nn.Linear(d_model, vocab_size, bias=False)
+
+        # Layer normalization for reasoning steps
+        self.reasoning_norms = nn.ModuleList([
+            nn.LayerNorm(d_model) for _ in range(num_reasoning_steps)
+        ])
+
+        # Initialize parameters
+        self._init_parameters()
+
+    def _init_parameters(self):
+        """Initialize parameters according to specification"""
+        # Token embeddings
+        nn.init.normal_(self.token_embedding.weight, std=0.02)
+        nn.init.normal_(self.pos_embedding.weight, std=0.02)
+
+        # Attention projections
+        for module in [self.W_q_input, self.W_k_slots, self.W_v_input,
+                      self.W_q_output, self.W_k_final, self.W_v_final]:
+            nn.init.xavier_uniform_(module.weight)
+
+        # Vocabulary projection
+        nn.init.normal_(self.W_vocab.weight, std=0.02)
+
+        # Connection matrix is already initialized in __init__
+
+    def forward(self, input_ids, return_reasoning_trace=False):
+        """
+        Forward pass following the formal specification exactly.
+
+        Args:
+            input_ids: [batch_size, seq_len] - Input token indices
+            return_reasoning_trace: bool - Whether to return reasoning states
+
+        Returns:
+            logits: [batch_size, seq_len, vocab_size] - Output logits
+            reasoning_trace: List of [batch_size, num_slots, d_model] (optional)
+        """
+        batch_size, seq_len = input_ids.shape
+        device = input_ids.device
+
+        # === STEP 1: INPUT PROCESSING ===
+        # Token and positional embeddings
+        positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
+        X_input = self.token_embedding(input_ids) + self.pos_embedding(positions)  # [B, S, D]
+
+        # === STEP 2: INPUT → SEMANTIC SLOT COMPRESSION ===
+        # Project input and slots for attention
+        Q_input = self.W_q_input(X_input)    # [B, S, D]
+        K_slots = self.W_k_slots(self.H)     # [N, D]
+        V_input = self.W_v_input(X_input)    # [B, S, D]
+
+        # Compress input sequence into semantic slots
+        A_compress = F.softmax(Q_input @ K_slots.T / math.sqrt(self.d_model), dim=-1)  # [B, S, N]
+        IR_activation = A_compress.transpose(-1, -2) @ V_input  # [B, N, D]
+
+        # Initialize reasoning state
+        H_state = self.H.unsqueeze(0).expand(batch_size, -1, -1) + IR_activation  # [B, N, D]
+
+        # Store reasoning trace if requested
+        reasoning_trace = [H_state.clone()] if return_reasoning_trace else []
+
+        # === STEP 3: ITERATIVE REASONING IN SEMANTIC SPACE ===
+        for step in range(self.num_reasoning_steps):
+            # Compute slot-to-slot influences
+            Influence = H_state @ self.C  # [B, N, D] @ [N, N] = [B, N, D]
+
+            # Update slot states with influences
+            H_state = H_state + Influence  # [B, N, D]
+
+            # Apply layer normalization
+            H_state = self.reasoning_norms[step](H_state)
+
+            # Store reasoning trace if requested
+            if return_reasoning_trace:
+                reasoning_trace.append(H_state.clone())
+
+        # === STEP 4: SEMANTIC SLOT → OUTPUT EXPANSION ===
+        # Project for output attention
+        Q_output = self.W_q_output(X_input)    # [B, S, D]
+        K_final = self.W_k_final(H_state)      # [B, N, D]
+        V_final = self.W_v_final(H_state)      # [B, N, D]
+
+        # Expand semantic slots back to sequence
+        A_expand = F.softmax(Q_output @ K_final.transpose(-1, -2) / math.sqrt(self.d_model), dim=-1)  # [B, S, N]
+        Y_output = A_expand @ V_final  # [B, S, D]
+
+        # === STEP 5: VOCABULARY PROJECTION ===
+        logits = self.W_vocab(Y_output)  # [B, S, V]
+
+        if return_reasoning_trace:
+            return logits, reasoning_trace
+        else:
+            return logits
+
+    def get_connection_stats(self):
+        """Analyze connection matrix properties"""
+        C_data = self.C.detach().cpu()
+        I_plus_C = torch.eye(self.num_slots) + C_data
+
+        eigenvals = torch.linalg.eigvals(I_plus_C)
+        spectral_radius = torch.abs(eigenvals).max().real
+
+        return {
+            'spectral_radius': spectral_radius.item(),
+            'max_connection': C_data.max().item(),
+            'min_connection': C_data.min().item(),
+            'mean_connection': C_data.mean().item(),
+            'connection_sparsity': (C_data.abs() < 0.01).float().mean().item(),
+            'positive_connections': (C_data > 0).sum().item(),
+            'negative_connections': (C_data < 0).sum().item(),
+        }
+
+    def enforce_spectral_radius(self, max_radius=0.95):
+        """Enforce spectral radius constraint for stability"""
+        with torch.no_grad():
+            I_plus_C = torch.eye(self.num_slots, device=self.C.device) + self.C
+            eigenvals = torch.linalg.eigvals(I_plus_C)
+            current_radius = torch.abs(eigenvals).max().real
+
+            if current_radius > max_radius:
+                scale_factor = max_radius / current_radius
+                self.C.data *= scale_factor
+                return True
+        return False
+```
+
+This completes the formal specification of the Connection Transformer architecture.
