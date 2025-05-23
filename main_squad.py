@@ -1,13 +1,17 @@
 import torch
+import torch.nn as nn  # <--- nn 임포트 추가!
+import torch.nn.functional as F  # <--- F 임포트 추가! (train_babi_model에서 사용)
+import torch.optim as optim  # <--- optim 임포트 추가! (train_babi_model에서 사용)
 import numpy as np
 import time
 import json
 import warnings
 import math  # math 임포트 추가 (SQuADDataset에서 사용될 수 있음)
+from torch.utils.data import DataLoader  # DataLoader 임포트 확인
 
 # 설정 파일 로드 (프로젝트 루트를 기준으로 경로 설정 필요)
 from configs.squad_config import get_squad_config  # SQuAD용 설정
-from datasets.squad_dataset import SQuADDataset
+from data_processing.squad_dataset import SQuADDataset
 from models.base_conn_trans import ConnectionTransformer
 from models.conn_trans_ffn import ConnTransWithFFN
 from models.standard_transformer import StandardTransformer

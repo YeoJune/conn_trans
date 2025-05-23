@@ -1,24 +1,25 @@
 import torch
+import torch.nn as nn  # <--- nn 임포트 추가!
+import torch.nn.functional as F  # <--- F 임포트 추가! (train_babi_model에서 사용)
+import torch.optim as optim  # <--- optim 임포트 추가! (train_babi_model에서 사용)
 import numpy as np
 import time
 import json
 import warnings
-import math  # 혹시 모를 사용을 위해 추가 (현재는 직접 사용 안 함)
+import math
+from torch.utils.data import DataLoader  # DataLoader 임포트 확인
 
-# 설정 파일 로드
-from configs.babi_config import get_babi_config  # bAbI용 설정
-from datasets.babi_dataset import BabiDataset
-# bAbI용으로 수정된 모델 클래스 임포트 (또는 모델 내에서 태스크 타입에 따라 분기)
-from models.base_conn_trans import ConnectionTransformer  # SQuAD용 헤드를 가짐
-from models.conn_trans_ffn import ConnTransWithFFN  # SQuAD용 헤드를 가짐
-from models.standard_transformer import StandardTransformer  # SQuAD용 헤드를 가짐
-# from training.trainer import train_model # SQuAD용 trainer, bAbI용으로 수정 필요
+# 설정 파일 및 모듈 임포트
+from configs.babi_config import get_babi_config
+from data_processing.babi_dataset import BabiDataset
+from models.base_conn_trans import ConnectionTransformer  # 부모 클래스로 사용
+from models.conn_trans_ffn import ConnTransWithFFN  # 부모 클래스로 사용
+from models.standard_transformer import StandardTransformer  # 부모 클래스로 사용
+# train_babi_model은 이 파일 내에 정의하거나 training.trainer에서 가져옴
 from utils.visualization import visualize_connection_matrix, analyze_reasoning_evolution, print_comparison_results
 
 
-# from utils.metrics import ... # bAbI는 주로 정확도 사용
-
-# JSON 인코더 (결과 저장 시 필요할 수 있음)
+# JSON 인코더
 class NpEncoder(json.JSONEncoder):
     def default(self, o):
         if isinstance(o, np.integer): return int(o)
@@ -31,96 +32,95 @@ class NpEncoder(json.JSONEncoder):
 
 
 # === bAbI 태스크를 위한 모델 수정 ===
-# SQuAD용으로 만들어진 모델 클래스들을 bAbI의 단일 토큰 분류에 맞게 수정합니다.
-# 방법 1: 각 모델 클래스를 상속받아 bAbI용 클래스 새로 정의 (아래 예시)
-# 방법 2: 기존 모델 클래스 __init__에 task_type 인자를 추가하고, forward에서 분기
-
 class BabiConnectionTransformer(ConnectionTransformer):
     def __init__(self, vocab_size, d_model, num_slots, num_reasoning_steps, max_seq_len,
-                 connection_init_std, spectral_radius_limit, **kwargs):  # 나머지 config 인자 받기
+                 connection_init_std, spectral_radius_limit, **kwargs):  # **kwargs 추가
+        # 부모 클래스 __init__ 호출 시, 부모가 받는 인자만 전달
         super().__init__(vocab_size, d_model, num_slots, num_reasoning_steps, max_seq_len,
-                         connection_init_std, spectral_radius_limit)
-        # bAbI는 단일 토큰 분류. 기존 qa_outputs 제거하고 classifier 추가
+                         connection_init_std, spectral_radius_limit)  # 여기서 **kwargs 제거
+
         if hasattr(self, 'qa_outputs_start'): del self.qa_outputs_start
         if hasattr(self, 'qa_outputs_end'): del self.qa_outputs_end
-        self.classifier = nn.Linear(d_model, vocab_size)
-        nn.init.xavier_uniform_(self.classifier.weight)  # 초기화
+        self.classifier = nn.Linear(d_model, vocab_size)  # nn 사용
+        nn.init.xavier_uniform_(self.classifier.weight)
         if self.classifier.bias is not None: nn.init.zeros_(self.classifier.bias)
 
         total_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print(f"🔹 BabiConnectionTransformer: {total_params:,} trainable parameters (for vocab {vocab_size})")
+        print(f"🔹 BabiConnectionTransformer: {total_params:,} trainable parameters (vocab: {vocab_size})")
 
     def forward(self, input_ids, attention_mask=None, token_type_ids=None, return_reasoning_trace=False):
-        # 부모 클래스의 forward 로직 중 Y_output까지는 동일하게 사용
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
         positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
         X_input = self.token_embedding(input_ids) + self.pos_embedding(positions)
-
         Q_input = self.W_q_input(X_input)
         K_slots = self.W_k_slots(self.H)
         V_input = self.W_v_input(X_input)
-        A_compress = F.softmax(Q_input @ K_slots.T / math.sqrt(self.d_model), dim=-1)
+        A_compress = F.softmax(Q_input @ K_slots.T / math.sqrt(self.d_model), dim=-1)  # F 사용
         IR_activation = A_compress.transpose(-1, -2) @ V_input
         H_state = self.H.unsqueeze(0).expand(batch_size, -1, -1) + IR_activation
-
         reasoning_trace_states = [H_state.clone()] if return_reasoning_trace else []
-
         for step in range(self.num_reasoning_steps):
             if self.d_model != self.num_slots and self.numerical_warnings < 1:
-                # print(f"⚠️ Warning: d_model ({self.d_model}) != num_slots ({self.num_slots}). H_state @ C assumes D=N.")
-                self.numerical_warnings += 1  # 경고 한 번만
+                self.numerical_warnings += 1
             Influence = H_state @ self.C
             H_state = H_state + Influence
             H_state = self.reasoning_norms[step](H_state)
             if return_reasoning_trace:
                 reasoning_trace_states.append(H_state.clone())
-
         Q_output = self.W_q_output(X_input)
         K_final = self.W_k_final(H_state)
         V_final = self.W_v_final(H_state)
-        A_expand = F.softmax(Q_output @ K_final.transpose(-1, -2) / math.sqrt(self.d_model), dim=-1)
-        Y_output = A_expand @ V_final  # [B, S, D]
-
-        # bAbI: 마지막 시퀀스 토큰의 출력으로 예측
-        last_token_output = Y_output[:, -1, :]  # [B, D]
-        logits = self.classifier(last_token_output)  # [B, vocab_size]
-
+        A_expand = F.softmax(Q_output @ K_final.transpose(-1, -2) / math.sqrt(self.d_model), dim=-1)  # F 사용
+        Y_output = A_expand @ V_final
+        last_token_output = Y_output[:, -1, :]
+        logits = self.classifier(last_token_output)
         if return_reasoning_trace:
             return logits, reasoning_trace_states
         else:
             return logits
 
+    def get_reasoning_trace(self, input_ids, attention_mask=None, token_type_ids=None):
+        self.eval()
+        with torch.no_grad():
+            logits, trace_states = self.forward(
+                input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                return_reasoning_trace=True
+            )
+        norms = []
+        if trace_states:
+            norms = [torch.norm(state, dim=-1).mean().item() for state in trace_states]
+        return trace_states, norms
+
 
 class BabiConnTransWithFFN(BabiConnectionTransformer):
     def __init__(self, vocab_size, d_model, num_slots, num_reasoning_steps, max_seq_len,
                  connection_init_std, spectral_radius_limit,
-                 ffn_dim_multiplier=4, dropout=0.1, **kwargs):
+                 ffn_dim_multiplier=4, dropout=0.1, **kwargs):  # **kwargs 추가
         super().__init__(vocab_size, d_model, num_slots, num_reasoning_steps, max_seq_len,
-                         connection_init_std, spectral_radius_limit)
+                         connection_init_std, spectral_radius_limit)  # **kwargs 제거
         ffn_dim = d_model * ffn_dim_multiplier
-        self.reasoning_ffn = nn.Sequential(
-            nn.Linear(d_model, ffn_dim), nn.GELU(), nn.Dropout(dropout),
-            nn.Linear(ffn_dim, d_model), nn.Dropout(dropout)
+        self.reasoning_ffn = nn.Sequential(  # nn 사용
+            nn.Linear(d_model, ffn_dim), nn.GELU(), nn.Dropout(dropout),  # nn 사용
+            nn.Linear(ffn_dim, d_model), nn.Dropout(dropout)  # nn 사용
         )
-        # self.classifier는 부모 클래스에서 이미 정의됨
         total_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print(f"🔸 BabiConnTransWithFFN: {total_params:,} trainable parameters (for vocab {vocab_size})")
+        print(f"🔸 BabiConnTransWithFFN: {total_params:,} trainable parameters (vocab: {vocab_size})")
 
     def forward(self, input_ids, attention_mask=None, token_type_ids=None, return_reasoning_trace=False):
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
         positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
         X_input = self.token_embedding(input_ids) + self.pos_embedding(positions)
-
         Q_input = self.W_q_input(X_input)
         K_slots = self.W_k_slots(self.H)
         V_input = self.W_v_input(X_input)
-        A_compress = F.softmax(Q_input @ K_slots.T / math.sqrt(self.d_model), dim=-1)
+        A_compress = F.softmax(Q_input @ K_slots.T / math.sqrt(self.d_model), dim=-1)  # F 사용
         IR_activation = A_compress.transpose(-1, -2) @ V_input
         H_state = self.H.unsqueeze(0).expand(batch_size, -1, -1) + IR_activation
         reasoning_trace_states = [H_state.clone()] if return_reasoning_trace else []
-
         for step in range(self.num_reasoning_steps):
             Influence = H_state @ self.C
             H_state_after_conn = H_state + Influence
@@ -129,16 +129,13 @@ class BabiConnTransWithFFN(BabiConnectionTransformer):
             H_state = H_state_norm_before_ffn + ffn_output
             if return_reasoning_trace:
                 reasoning_trace_states.append(H_state.clone())
-
         Q_output = self.W_q_output(X_input)
         K_final = self.W_k_final(H_state)
         V_final = self.W_v_final(H_state)
-        A_expand = F.softmax(Q_output @ K_final.transpose(-1, -2) / math.sqrt(self.d_model), dim=-1)
+        A_expand = F.softmax(Q_output @ K_final.transpose(-1, -2) / math.sqrt(self.d_model), dim=-1)  # F 사용
         Y_output = A_expand @ V_final
-
         last_token_output = Y_output[:, -1, :]
         logits = self.classifier(last_token_output)
-
         if return_reasoning_trace:
             return logits, reasoning_trace_states
         else:
@@ -146,18 +143,19 @@ class BabiConnTransWithFFN(BabiConnectionTransformer):
 
 
 class BabiStandardTransformer(StandardTransformer):
-    def __init__(self, vocab_size, d_model, num_heads, num_layers, ffn_dim_multiplier, dropout, max_seq_len, **kwargs):
-        super().__init__(vocab_size, d_model, num_heads, num_layers, ffn_dim_multiplier, dropout, max_seq_len)
+    def __init__(self, vocab_size, d_model, num_heads, num_layers, ffn_dim_multiplier, dropout, max_seq_len,
+                 **kwargs):  # **kwargs 추가
+        super().__init__(vocab_size, d_model, num_heads, num_layers, ffn_dim_multiplier, dropout,
+                         max_seq_len)  # **kwargs 제거
         if hasattr(self, 'qa_outputs_start'): del self.qa_outputs_start
         if hasattr(self, 'qa_outputs_end'): del self.qa_outputs_end
-        self.classifier_babi = nn.Linear(d_model, vocab_size)
+        self.classifier_babi = nn.Linear(d_model, vocab_size)  # nn 사용
         nn.init.xavier_uniform_(self.classifier_babi.weight)
         if self.classifier_babi.bias is not None: nn.init.zeros_(self.classifier_babi.bias)
-
         total_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print(f"🔶 BabiStandardTransformer: {total_params:,} trainable parameters (for vocab {vocab_size})")
+        print(f"🔶 BabiStandardTransformer: {total_params:,} trainable parameters (vocab: {vocab_size})")
 
-    def forward(self, input_ids, attention_mask=None, token_type_ids=None, **kwargs):
+    def forward(self, input_ids, attention_mask=None, token_type_ids=None, **kwargs):  # **kwargs 추가
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
         positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
@@ -170,17 +168,17 @@ class BabiStandardTransformer(StandardTransformer):
         return logits
 
 
-# bAbI용 train_model (SQuAD용 train_model과 유사하나, 출력 및 손실 계산 방식 다름)
+# bAbI용 train_model
 def train_babi_model(model, train_loader, val_loader, config, device='cuda', model_name="Model"):
     model = model.to(device)
-    optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),
+    optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),  # optim 사용
                             lr=config["learning_rate"], weight_decay=config["weight_decay"])
 
     num_training_steps = len(train_loader) * config["max_epochs"]
     actual_warmup_steps = min(config["warmup_steps"], num_training_steps // 10) if num_training_steps > 0 else config[
         "warmup_steps"]
     pct_start_val = float(actual_warmup_steps) / num_training_steps if num_training_steps > 0 else 0.1
-    scheduler = optim.lr_scheduler.OneCycleLR(
+    scheduler = optim.lr_scheduler.OneCycleLR(  # optim 사용
         optimizer, max_lr=config["learning_rate"],
         total_steps=num_training_steps if num_training_steps > 0 else None,
         pct_start=pct_start_val,
@@ -188,7 +186,6 @@ def train_babi_model(model, train_loader, val_loader, config, device='cuda', mod
 
     best_val_acc = 0.0
     print(f"\n🚀 Training {model_name} for bAbI on {device}...")
-    print(f"   Total training steps: {num_training_steps if num_training_steps > 0 else 'N/A (no scheduler)'}")
     print("=" * 50)
 
     for epoch in range(config["max_epochs"]):
@@ -203,12 +200,12 @@ def train_babi_model(model, train_loader, val_loader, config, device='cuda', mod
             attention_mask = batch['attention_mask'].to(device)
             answer_ids = batch['answer_ids'].to(device)
 
-            if answer_ids.size(1) == 0: continue  # 답변이 없는 경우 스킵
+            if answer_ids.size(1) == 0: continue
             first_answer_token = answer_ids[:, 0]
 
-            logits = model(input_ids, attention_mask=attention_mask)  # [B, VocabSize]
+            logits = model(input_ids, attention_mask=attention_mask)
 
-            loss = F.cross_entropy(logits, first_answer_token)
+            loss = F.cross_entropy(logits, first_answer_token)  # F 사용
 
             if hasattr(model, 'C') and model.C is not None and "connection_regularization" in config:
                 c_reg = config["connection_regularization"] * torch.norm(model.C, 'fro') ** 2
@@ -247,7 +244,7 @@ def train_babi_model(model, train_loader, val_loader, config, device='cuda', mod
                 first_answer_token = answer_ids[:, 0]
 
                 logits = model(input_ids, attention_mask=attention_mask)
-                loss_val = F.cross_entropy(logits, first_answer_token)
+                loss_val = F.cross_entropy(logits, first_answer_token)  # F 사용
                 total_val_loss += loss_val.item() * input_ids.size(0)
                 predicted = torch.argmax(logits, dim=1)
                 val_correct += (predicted == first_answer_token).sum().item()
@@ -281,13 +278,10 @@ def train_babi_model(model, train_loader, val_loader, config, device='cuda', mod
 
 def main_babi():
     CFG_BABI = get_babi_config()
-    babi_task_id = 16  # 예시로 qa1 사용, 필요시 변경 (예: 16)
-    # bAbI Dataset __init__에 맞게 hf_config_name_prefix 전달
-    # 예: "en-10k-qa" -> BabiDataset에서 task_id와 결합하여 "en-10k-qa1" 등으로 사용
-    hf_config_prefix = "en-10k-qa"
+    babi_task_id = 1
+    babi_type_prefix_to_load = CFG_BABI.get("babi_hf_type_prefix", "en-10k")
 
-    print(f"🚀 Connection Transformer - bAbI Task qa{babi_task_id} Experiment")
-    print(f"   Using bAbI config prefix: {hf_config_prefix}")
+    print(f"🚀 Connection Transformer - bAbI Task qa{babi_task_id} (Type Prefix: {babi_type_prefix_to_load}) Experiment")
     print("=" * 70)
 
     if torch.cuda.is_available(): torch.backends.cudnn.benchmark = True
@@ -295,14 +289,14 @@ def main_babi():
     np.random.seed(42)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(42)
 
-    print(f"\n📦 bAbI Task qa{babi_task_id} Data Loading...")
+    print(f"\n📦 bAbI Task qa{babi_task_id} (Type Prefix: {babi_type_prefix_to_load}) Data Loading...")
     try:
         train_dataset = BabiDataset(task_id=babi_task_id,
-                                    babi_hf_config_name_prefix=hf_config_prefix,
+                                    babi_type_prefix=babi_type_prefix_to_load,
                                     split='train',
                                     max_seq_len=CFG_BABI["max_seq_len"])
         val_dataset = BabiDataset(task_id=babi_task_id,
-                                  babi_hf_config_name_prefix=hf_config_prefix,
+                                  babi_type_prefix=babi_type_prefix_to_load,
                                   split='validation',
                                   max_seq_len=CFG_BABI["max_seq_len"])
         print("✅ bAbI Data loading successful")
@@ -337,20 +331,27 @@ def main_babi():
     if sample_item_babi:
         sample_batch_babi = {k: v.unsqueeze(0) for k, v in sample_item_babi.items() if isinstance(v, torch.Tensor)}
         if 'answer_text' in sample_item_babi: sample_batch_babi['answer_text'] = [sample_item_babi['answer_text']]
+        if 'token_type_ids' not in sample_batch_babi and 'input_ids' in sample_batch_babi:
+            sample_batch_babi['token_type_ids'] = torch.zeros_like(sample_batch_babi['input_ids'])
         print(f"  📊 Prepared sample batch from bAbI validation set for trace.")
 
     for model_name, model_class in models_to_train_babi:
         print("\n" + "=" * 60 + f"\n▶️ bAbI EXPERIMENT: {model_name}" + "\n" + "=" * 60)
         if torch.cuda.is_available(): torch.cuda.empty_cache()
 
+        # 모델 초기화 시 필요한 모든 인자 전달
+        # StandardTransformer와 ConnTrans 계열 모델이 받는 인자가 다를 수 있으므로,
+        # **kwargs를 사용하거나, 각 모델에 맞게 명시적으로 전달해야 함.
+        # 여기서는 모든 config 값을 일단 전달하고, 모델 내부에서 필요한 것만 사용하도록 함.
         model_instance = model_class(
             vocab_size=vocab_size,
             d_model=CFG_BABI["d_model"],
-            num_slots=CFG_BABI["num_slots"],
-            num_reasoning_steps=CFG_BABI["num_reasoning_steps"],
+            num_slots=CFG_BABI["num_slots"],  # StandardTransformer는 이 인자를 사용하지 않음
+            num_reasoning_steps=CFG_BABI["num_reasoning_steps"],  # StandardTransformer는 num_layers로 사용
             max_seq_len=CFG_BABI["max_seq_len"],
-            connection_init_std=CFG_BABI.get("connection_init_std", 0.01),
-            spectral_radius_limit=CFG_BABI.get("spectral_radius_limit", 0.95),
+            connection_init_std=CFG_BABI.get("connection_init_std", 0.01),  # ConnTrans 계열용
+            spectral_radius_limit=CFG_BABI.get("spectral_radius_limit", 0.95),  # ConnTrans 계열용
+            # StandardTransformer 및 ConnTransWithFFN에 필요한 추가 인자
             num_heads=CFG_BABI.get("num_heads", 8),
             num_layers=CFG_BABI.get("num_transformer_layers", CFG_BABI["num_reasoning_steps"]),
             ffn_dim_multiplier=CFG_BABI.get("ffn_dim_multiplier", 4),
@@ -364,8 +365,6 @@ def main_babi():
             if hasattr(model_instance, 'C') and model_instance.C is not None:
                 visualize_connection_matrix(model_instance, f"{model_name.replace(' ', '_')}_babi_C.png",
                                             f" ({model_name} bAbI)")
-            # bAbI용 모델의 get_reasoning_trace는 SQuAD용과 다를 수 있음 (Y_output 기반 등)
-            # 현재는 ConnectionTransformer의 get_reasoning_trace를 그대로 사용한다고 가정
             if hasattr(model_instance, 'get_reasoning_trace'):
                 analyze_reasoning_evolution(model_instance, sample_batch_babi,
                                             f"{model_name.replace(' ', '_')}_babi_evo.png", model_name)
@@ -377,14 +376,13 @@ def main_babi():
     print(f"\n💾 Saving bAbI Experimental Results...")
     babi_exp_results = {
         "experiment_type": "babi_conn_trans_comparison_refactored",
-        "dataset": f"bAbI qa{babi_task_id}",
-        "babi_config_loaded": f"{hf_config_prefix}{babi_task_id}",
+        "dataset_info": {"task_id": babi_task_id, "type_prefix": babi_type_prefix_to_load},
         "config_hyperparameters": CFG_BABI,
         "results_metric": "Validation Accuracy",
         "model_accuracies": results_babi,
         "timestamp": time.strftime("%Y%m%d_%H%M%S")
     }
-    babi_results_filename = f"babi_qa{babi_task_id}_results_{babi_exp_results['timestamp']}.json"
+    babi_results_filename = f"babi_qa{babi_task_id}_{babi_type_prefix_to_load}_results_{babi_exp_results['timestamp']}.json"
     try:
         with open(babi_results_filename, "w") as f:
             json.dump(babi_exp_results, f, indent=2, cls=NpEncoder)
@@ -399,11 +397,11 @@ def main_babi():
 if __name__ == "__main__":
     warnings.filterwarnings("ignore", category=UserWarning)
 
-    # bAbI 실험 실행
     main_babi()
 
-    # SQuAD 실험 실행 (필요시 주석 해제)
+    # SQuAD 실험은 main_squad.py에서 별도 실행
     # print("\n\n" + "="*20 + " Moving to SQuAD Experiments " + "="*20)
+    # from main_squad import main_squad
     # main_squad()
 
     print("\n\n" + "=" * 20 + " All Specified Experiments Finished " + "=" * 20)

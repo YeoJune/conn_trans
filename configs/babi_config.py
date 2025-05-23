@@ -6,7 +6,7 @@ BABI_CONFIG = get_base_config()  # 기본 설정 상속
 BABI_CONFIG.update({
     "task_name": "babi_qa1",  # 예시: 'babi_qa1', 'babi_qa16' 등 main_babi.py에서 설정 가능
     "dataset_name_hf": "facebook/babi_qa",  # HuggingFace 데이터셋 이름
-    "babi_hf_config_name": "en-10k-qa1",  # task_id=1일 때 사용할 name (main_babi.py에서 task_id에 따라 동적 생성)
+    "babi_hf_type_prefix": "en-10k",  # task_id=1일 때 사용할 name (main_babi.py에서 task_id에 따라 동적 생성)
     # 또는 "en-10k"로 하고 task_no를 사용
 
     "max_seq_len": 128,  # bAbI는 문장이 짧음
