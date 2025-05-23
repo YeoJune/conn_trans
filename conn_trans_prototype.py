@@ -207,15 +207,19 @@ class ConnectionTransformer(nn.Module):
                 return True
         return False
 
-    def get_reasoning_trace(self, input_ids, attention_mask=None):
+    def get_reasoning_trace(self, input_ids, attention_mask=None):  # attention_mask 인자 추가 (forward와 일치)
         """Get detailed reasoning trace for analysis"""
-        self.eval()
+        self.eval()  # 이미 eval 모드일 수 있지만, 명시적으로 설정
         with torch.no_grad():
-            logits, trace = self.forward(input_ids, attention_mask, return_reasoning_trace=True)
-            
+            # forward 호출 시 attention_mask 전달
+            logits, trace = self.forward(input_ids, attention_mask=attention_mask, return_reasoning_trace=True)
+
         # Compute norms for each step
-        norms = [torch.norm(state, dim=-1).mean().item() for state in trace]
-        
+        # trace가 비어있지 않은지 확인 후 norms 계산
+        norms = []
+        if trace:  # trace가 비어있지 않은 경우에만 norms 계산
+            norms = [torch.norm(state, dim=-1).mean().item() for state in trace]
+
         return trace, norms
 
 
@@ -647,32 +651,57 @@ def visualize_connection_matrix(model, save_path="connection_matrix.png", title_
     
     print(f"Connection Matrix saved to {save_path}")
 
+def analyze_reasoning_evolution(model, sample_input,
+                                save_path="reasoning_evolution.png"):  # sample_input은 BabiDataset의 __getitem__ 반환값 (dict)
+    """추론 과정 진화 분석"""
+    if not hasattr(model, 'get_reasoning_trace'):  # 원본 코드에 get_reasoning_trace가 ConnectionTransformer에만 있음
+        # 또는 model.__class__.__name__ 등으로 모델 클래스 이름 확인하여 분기
+        print(
+            f"Model {model.__class__.__name__} doesn't support get_reasoning_trace or it's not the intended model type.")
+        return None, None  # 또는 적절한 기본값 반환
 
-def analyze_reasoning_evolution(model, sample_input, save_path="reasoning_evolution.png"):
-    """Analyze reasoning process evolution"""
-    if not hasattr(model, 'get_reasoning_trace'):
-        print("Model doesn't support reasoning trace")
-        return
-    
-    model.eval()
+    model.eval()  # 모델을 평가 모드로 설정
     with torch.no_grad():
+        # 모델이 현재 어떤 디바이스에 있는지 확인
+        device = next(model.parameters()).device
+
+        # sample_input의 텐서들을 모델과 동일한 디바이스로 이동
+        # sample_input은 BabiDataset의 __getitem__에서 반환된 딕셔너리 형태
+        input_ids_on_device = sample_input['input_ids'].unsqueeze(0).to(device)  # 배치 차원 추가 및 디바이스로 이동
+
+        # attention_mask도 동일하게 처리 (존재한다면)
+        # ConnectionTransformer의 get_reasoning_trace는 attention_mask를 받음
+        attention_mask_on_device = None
+        if 'attention_mask' in sample_input and sample_input['attention_mask'] is not None:
+            attention_mask_on_device = sample_input['attention_mask'].unsqueeze(0).to(device)
+
+        # 수정된 get_reasoning_trace 호출
+        # ConnectionTransformer의 get_reasoning_trace는 input_ids와 attention_mask를 받음
         trace, norms = model.get_reasoning_trace(
-            sample_input['input_ids'].unsqueeze(0),
-            sample_input['attention_mask'].unsqueeze(0)
+            input_ids_on_device,
+            attention_mask=attention_mask_on_device  # attention_mask 전달
         )
-    
-    plt.figure(figsize=(10, 6))
-    plt.plot(range(len(norms)), norms, 'o-', linewidth=2, markersize=8)
-    plt.xlabel('Reasoning Step')
-    plt.ylabel('Average Activation Norm')
-    plt.title('Reasoning State Evolution')
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"Reasoning evolution saved to {save_path}")
-    return trace, norms
+
+    # norms가 None이거나 비어있을 경우 처리 (get_reasoning_trace가 (None, norms)를 반환할 수 있음)
+    if norms is None or not norms:
+        print(f"No norm trace data returned from get_reasoning_trace for model {model.__class__.__name__}.")
+        return trace, norms  # 또는 (None, [])
+
+    # 추론 단계별 norm 변화 시각화 # 원본 주석
+    plt.figure(figsize=(10, 6))  # 원본 figsize
+    plt.plot(range(len(norms)), norms, 'o-', linewidth=2, markersize=8)  # 원본 파라미터
+    plt.xlabel('Reasoning Step')  # 원본 xlabel
+    plt.ylabel('Average Activation Norm')  # 원본 ylabel
+    plt.title('Reasoning State Evolution')  # 원본 title
+    plt.grid(True, alpha=0.3)  # 원본 파라미터
+    plt.tight_layout()  # 원본 호출
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')  # 원본 파라미터
+    plt.close()  # 원본 호출
+
+    print(f"Reasoning evolution saved to {save_path}")  # 원본 print
+    print(f"Norm evolution: {' → '.join([f'{n:.2f}' for n in norms])}")  # 원본 print
+
+    return trace, norms  # 원본 return
 
 
 def print_comparison_results(results_dict):
@@ -944,17 +973,56 @@ def main():
         print(f"  🔍 Empirical validation of theoretical properties")
         print(f"  ⚡ Parameter efficiency analysis")
         print(f"  🎯 Novel reasoning mechanism demonstrated")
-        
+
         # Parameter efficiency analysis
-        conn_params = next((sum(p.numel() for p in ConnectionTransformer(vocab_size, CONFIG["d_model"], CONFIG["num_slots"], CONFIG["num_reasoning_steps"], CONFIG["seq_len"]).parameters() if p.requires_grad), 0))
-        standard_params = next((sum(p.numel() for p in StandardTransformer(vocab_size, CONFIG["d_model"], 8, CONFIG["num_reasoning_steps"], CONFIG["d_model"]*4, 0.1, CONFIG["seq_len"]).parameters() if p.requires_grad), 0))
-        
+        try:
+            # ConnectionTransformer 인스턴스를 생성하여 파라미터 수 계산
+            temp_conn_model = ConnectionTransformer(
+                vocab_size,
+                CONFIG["d_model"],
+                CONFIG["num_slots"],
+                CONFIG["num_reasoning_steps"],
+                CONFIG["seq_len"]
+            )
+            conn_params = sum(p.numel() for p in temp_conn_model.parameters() if p.requires_grad)
+            del temp_conn_model  # 메모리 해제
+        except Exception as e:
+            print(f"Warning: Could not calculate params for ConnectionTransformer: {e}")
+            conn_params = 0  # 오류 발생 시 0으로 설정
+
+        try:
+            # StandardTransformer 인스턴스를 생성하여 파라미터 수 계산
+            temp_std_model = StandardTransformer(
+                vocab_size,
+                CONFIG["d_model"],
+                8,  # num_heads
+                CONFIG["num_reasoning_steps"],  # num_layers
+                CONFIG["d_model"] * 4,  # ffn_dim
+                0.1,  # dropout
+                CONFIG["seq_len"]
+            )
+            standard_params = sum(p.numel() for p in temp_std_model.parameters() if p.requires_grad)
+            del temp_std_model  # 메모리 해제
+        except Exception as e:
+            print(f"Warning: Could not calculate params for StandardTransformer: {e}")
+            standard_params = 0  # 오류 발생 시 0으로 설정
+
         if conn_params > 0 and standard_params > 0:
             efficiency_ratio = standard_params / conn_params
             print(f"\n⚡ Parameter Efficiency:")
             print(f"  Connection Transformer: {conn_params:,} parameters")
             print(f"  Standard Transformer: {standard_params:,} parameters")
             print(f"  Efficiency ratio: {efficiency_ratio:.2f}x")
+        elif conn_params > 0:
+            print(f"\n⚡ Parameter Efficiency:")
+            print(f"  Connection Transformer: {conn_params:,} parameters")
+            print(f"  Standard Transformer: Could not be calculated.")
+        elif standard_params > 0:
+            print(f"\n⚡ Parameter Efficiency:")
+            print(f"  Connection Transformer: Could not be calculated.")
+            print(f"  Standard Transformer: {standard_params:,} parameters")
+        else:
+            print(f"\n⚡ Parameter Efficiency: Could not calculate parameters for models.")
         
         print(f"\n🚀 Impact:")
         print(f"  ✨ Connection-based reasoning is now implementable")
