@@ -175,7 +175,7 @@ class PureConnTrans(nn.Module):
         for step in range(self.config["num_steps"]):
             # Connection 업데이트
             knowledge_injection = torch.matmul(scaled_C, self.H)
-            state_evolution = torch.matmul(I + scaled_C, X)
+            state_evolution = torch.einsum('ik,bkj->bij', (I + scaled_C), X)
             X_new = knowledge_injection.unsqueeze(0) + state_evolution
             
             # 정규화로 발산 방지
@@ -224,7 +224,7 @@ class PureConnTrans(nn.Module):
         
         for step in range(self.config["num_steps"]):
             knowledge_injection = torch.matmul(scaled_C, self.H)
-            state_evolution = torch.matmul(I + scaled_C, X)
+            state_evolution = torch.einsum('ik,bkj->bij', (I + scaled_C), X)
             X_new = knowledge_injection.unsqueeze(0) + state_evolution
             X = self.connection_norm(X_new)
             X = torch.clamp(X, min=-10, max=10)
@@ -304,7 +304,7 @@ class ConnTransWithFFN(PureConnTrans):
         for step in range(self.config["num_steps"]):
             # Connection update
             knowledge_injection = torch.matmul(scaled_C, self.H)
-            state_evolution = torch.matmul(I + scaled_C, X)
+            state_evolution = torch.einsum('ik,bkj->bij', (I + scaled_C), X)
             X_conn = knowledge_injection.unsqueeze(0) + state_evolution
             X_conn = self.connection_norm(X_conn)
             
@@ -406,7 +406,7 @@ class BabiDataset(Dataset):
         try:
             # 새로운 방식: task별 개별 로드
             task_name = f"qa{task_id}"
-            dataset = load_dataset("facebook/babi_qa", name="en-10k-qa1", task_no=task_name)
+            dataset = load_dataset("facebook/babi_qa", name="en-10k-qa1")
             
             # split 이름 매핑
             split_mapping = {
