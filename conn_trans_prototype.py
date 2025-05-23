@@ -404,10 +404,8 @@ class BabiDataset(Dataset):
         print(f"Loading bAbI task qa{task_id} (config: en-10k, split: {split})...") # 로그 메시지 수정
         
         try:
-            # task_id를 사용하여 task_name 구성
-            task_name_hf = f"qa{self.task_id}" # self.task_id 사용
             # name="en-10k"로 고정, task_no는 동적으로 설정
-            dataset = load_dataset("facebook/babi_qa", name="en-10k-qa1", task_no=task_name_hf)
+            dataset = load_dataset("facebook/babi_qa", name="en-10k-qa1", task_no=self.task_id)
             
             # split 이름 매핑 (이전 코드와 동일)
             split_mapping = {
@@ -957,7 +955,7 @@ def main():
     print("🚀 CONN-TRANS vs STANDARD TRANSFORMER")
     print("🔬 Comprehensive Comparison with Numerical Stability")
     print("=" * 70)
-    print("Task: bAbI Task 16 (Basic Induction)")
+    print("Task: bAbI Task 1 (Basic Induction)")
     print("Models: Pure Conn-Trans | Conn-Trans+FFN | Standard Transformer")
     print("Hardware: RTX 4090 (24GB)")
     print("Safety: Spectral normalization, gradient clipping, NaN detection")
@@ -973,8 +971,8 @@ def main():
     print("\n📦 Data Loading (Updated 2024)...")
     
     try:
-        train_dataset = BabiDataset(task_id=16, split='train')
-        val_dataset = BabiDataset(task_id=16, split='validation')
+        train_dataset = BabiDataset(task_id=1, split='train')
+        val_dataset = BabiDataset(task_id=1, split='validation')
         print("✅ 데이터 로딩 성공")
         
     except Exception as e:
@@ -990,8 +988,8 @@ def main():
         
         # 실험을 중단하지 않고 더미 데이터로 계속 (선택사항)
         print("\n⚠️ 더미 데이터로 아키텍처 테스트 계속 진행")
-        train_dataset = create_dummy_babi_dataset(1000, 16)
-        val_dataset = create_dummy_babi_dataset(200, 16)
+        train_dataset = create_dummy_babi_dataset(1000, 1)
+        val_dataset = create_dummy_babi_dataset(200, 1)
         print("🔧 더미 데이터셋 생성 완료")
     
     train_loader = DataLoader(
@@ -1126,7 +1124,7 @@ def main():
     
     experiment_results = {
         "experiment_type": "comprehensive_comparison_stable_2024",
-        "task": "babi_task16_basic_induction", 
+        "task": "babi_task1_basic_induction", 
         "hardware": "RTX_4090_24GB",
         "data_version": "2024_updated_loading",
         "config": CONFIG,
@@ -1235,7 +1233,7 @@ def main():
     print("🚀 CONN-TRANS vs STANDARD TRANSFORMER")
     print("🔬 Comprehensive Comparison with Numerical Stability")
     print("=" * 70)
-    print("Task: bAbI Task 16 (Basic Induction)")
+    print("Task: bAbI Task 1 (Basic Induction)")
     print("Models: Pure Conn-Trans | Conn-Trans+FFN | Standard Transformer")
     print("Hardware: RTX 4090 (24GB)")
     print("Safety: Spectral normalization, gradient clipping, NaN detection")
@@ -1250,8 +1248,8 @@ def main():
     print("\n📦 Data Loading (Updated 2024)...")
     
     try:
-        train_dataset = BabiDataset(task_id=16, split='train')
-        val_dataset = BabiDataset(task_id=16, split='validation')
+        train_dataset = BabiDataset(task_id=1, split='train')
+        val_dataset = BabiDataset(task_id=1, split='validation')
         print("✅ 데이터 로딩 성공")
         
     except Exception as e:
@@ -1267,8 +1265,8 @@ def main():
         
         # 실험을 중단하지 않고 더미 데이터로 계속 (선택사항)
         print("\n⚠️ 더미 데이터로 아키텍처 테스트 계속 진행")
-        train_dataset = create_dummy_babi_dataset(1000, 16)
-        val_dataset = create_dummy_babi_dataset(200, 16)
+        train_dataset = create_dummy_babi_dataset(1000, 1)
+        val_dataset = create_dummy_babi_dataset(200, 1)
         print("🔧 더미 데이터셋 생성 완료")
     
     train_loader = DataLoader(
@@ -1403,7 +1401,7 @@ def main():
     
     experiment_results = {
         "experiment_type": "comprehensive_comparison_stable",
-        "task": "babi_task16_basic_induction", 
+        "task": "babi_task1_basic_induction", 
         "hardware": "RTX_4090_24GB",
         "config": CONFIG,
         "results": results,
