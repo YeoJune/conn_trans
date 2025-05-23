@@ -394,106 +394,76 @@ class StandardTransformer(nn.Module):
 
 
 class BabiDataset(Dataset):
-    """bAbI Task Dataset - 2024년 최신 HuggingFace 형식 (사용자 제공 코드 기반, load_dataset만 수정)"""
+    """bAbI Task Dataset - 2024년 최신 HuggingFace 형식"""
     
-    def __init__(self, task_id=1, split='train', max_seq_len=128): # task_id 기본값을 1 (qa1)로 변경
+    def __init__(self, task_id=16, split='train', max_seq_len=128):
         self.max_seq_len = max_seq_len
-        self.task_id = task_id # 생성자에서 받은 task_id 사용
+        self.task_id = task_id
         
-        # HuggingFace 로딩 방식 (name="en-10k-qa1", task_no="{task_id}" 사용)
-        print(f"Loading bAbI task qa{task_id} (config: en-10k-qa1, split: {split})...") # 로그 메시지 수정
+        # 최신 HuggingFace 로딩 방식
+        print(f"Loading bAbI task {task_id} ({split})...")
         
         try:
-            task_name_hf = self.task_id # task_id를 사용하여 task_name_hf 설정
-            # name="en-10k-qa1"로 고정, task_no는 동적으로 설정
-            dataset = load_dataset("facebook/babi_qa", name="en-10k-qa1", task_no=task_name_hf)
+            # 새로운 방식: task별 개별 로드
+            task_name = f"qa{task_id}"
+            dataset = load_dataset("facebook/babi_qa", name="en-10k-qa1", task_no=task_name)
             
-            # split 이름 매핑 (이전 코드와 동일)
+            # split 이름 매핑
             split_mapping = {
                 'train': 'train',
                 'validation': 'test',  # bAbI에는 validation이 없고 test만 있음
                 'test': 'test'
             }
             
-            actual_split = split_mapping.get(split, 'train') # split 기본값 'train' 사용
-
-            if actual_split not in dataset: # actual_split이 dataset dict에 있는지 확인
-                available_splits = list(dataset.keys())
-                raise ValueError(
-                    f"Split '{actual_split}' (mapped from '{split}') not found for bAbI task {task_name_hf} with config 'en-10k-qa1'. "
-                    f"Available splits: {available_splits}."
-                )
+            actual_split = split_mapping.get(split, 'train')
             self.raw_data = dataset[actual_split]
-            print(f"✅ Successfully loaded from facebook/babi_qa (en-10k-qa1, {task_name_hf}, {actual_split}).")
             
         except Exception as e:
-            print(f"❌ HuggingFace 로딩 실패 (facebook/babi_qa, en-10k-qa1, qa{self.task_id}): {e}")
-            print("🔄 대체 방법 시도 중...") # 이전 코드와 동일
+            print(f"❌ HuggingFace 로딩 실패: {e}")
+            print("🔄 대체 방법 시도 중...")
             
-            # 대체 방법 1: 다른 사용자의 업로드 버전 시도 (이전 코드와 동일, 실제 사용 시 주의)
+            # 대체 방법 1: 다른 사용자의 업로드 버전 시도
             try:
-                # 이 부분은 실제 사용 가능한 대체 데이터셋 이름으로 변경해야 합니다.
-                # 지금은 예시로 "habanoz/babi_qa_en_valid_10k_qa1"을 사용하지만, task_id에 맞게 조정 필요.
-                # generic fallback is hard, so this specific one might not match task_id
-                fallback_dataset_name = "habanoz/babi_qa_en_valid_10k_qa1" # task_id 1에 대한 예시
-                if self.task_id != 1:
-                    print(f"⚠️ Fallback dataset {fallback_dataset_name} might not match requested task_id {self.task_id}.")
-
-                dataset_fallback = load_dataset(fallback_dataset_name)
-                # split_mapping을 여기서도 적용
-                actual_split_fallback = split_mapping.get(split, 'train')
-                self.raw_data = dataset_fallback[actual_split_fallback] if actual_split_fallback in dataset_fallback else dataset_fallback['train']
-                print(f"✅ 대체 데이터셋 ({fallback_dataset_name}) 로딩 성공")
-            except Exception as e_fallback: # except 블록을 하나로 합침
-                print(f"❌ 모든 온라인 소스 실패: {e_fallback}") # 실패 원인 포함
-                print("💡 해결방법:") # 이전 코드와 동일
+                dataset = load_dataset("habanoz/babi_qa_en_valid_10k_qa1")
+                self.raw_data = dataset[actual_split] if actual_split in dataset else dataset['train']
+                print("✅ 대체 데이터셋 로딩 성공")
+            except:
+                # 대체 방법 2: 로컬 파일 사용 또는 에러
+                print("❌ 모든 온라인 소스 실패")
+                print("💡 해결방법:")
                 print("  1. 수동 다운로드: http://www.thespermwhale.com/jaseweston/babi/tasks_1-20_v1-2.tar.gz")
                 print("  2. 또는 다음 명령어로 캐시 클리어:")
                 print("     rm -rf ~/.cache/huggingface/datasets/facebook___babi_qa")
-                print("     rm -rf ~/.cache/huggingface/datasets/habanoz___babi_qa_en_valid_10k_qa1") # 대체 데이터셋 캐시도
                 raise Exception("bAbI 데이터셋 로딩 실패. 위 해결방법을 시도해주세요.")
         
-        # 데이터 변환 (이전 코드와 동일)
+        # 데이터 변환
         self.data = self._convert_format()
         print(f"Loaded {len(self.data)} examples")
         
-        # 어휘 구축 (이전 코드와 동일)
+        # 어휘 구축
         self.vocab = self._build_vocab()
         self.word_to_id = {word: i for i, word in enumerate(self.vocab)}
         self.vocab_size = len(self.vocab)
         
         print(f"Vocabulary size: {self.vocab_size}")
     
-    def _convert_format(self): # 이전 코드와 동일
+    def _convert_format(self):
         """HuggingFace 형식을 내부 형식으로 변환"""
         converted_data = []
         
         for example in self.raw_data:
             # HuggingFace bAbI 데이터 구조에 맞게 변환
-            # story 필드가 리스트 오브 딕셔너리 형태일 수 있음 {'text': "...", 'id': ...}
-            story_content = example.get('story', [])
-            processed_story = []
-            if isinstance(story_content, list):
-                for item in story_content:
-                    if isinstance(item, dict) and 'text' in item:
-                        processed_story.append(item['text'])
-                    elif isinstance(item, str): # Fallback for list of strings
-                        processed_story.append(item)
-            elif isinstance(story_content, str): # Fallback for single string story
-                 processed_story.append(story_content)
-
-
             converted_example = {
-                'story': processed_story, # 처리된 스토리 사용
+                'story': example.get('story', []),
                 'question': example.get('question', ''),
                 'answer': example.get('answer', ''),
-                'task': self.task_id # 생성자에서 받은 task_id 사용
+                'task': self.task_id
             }
             converted_data.append(converted_example)
         
         return converted_data
     
-    def _build_vocab(self): # 이전 코드와 동일
+    def _build_vocab(self):
         """어휘 구축"""
         vocab = set()
         vocab.add('<PAD>')
@@ -502,38 +472,37 @@ class BabiDataset(Dataset):
         
         for example in self.data:
             # 스토리 + 질문 + 답변에서 단어 추출
-            story_words = ' '.join(example['story']).lower().split() # example['story']는 이제 문자열 리스트
+            story_words = ' '.join(example['story']).lower().split()
             question_words = example['question'].lower().split()
             answer_words = example['answer'].lower().split()
             
             for word in story_words + question_words + answer_words:
-                # 특수문자 제거 및 정리 (이전 코드 방식)
+                # 특수문자 제거 및 정리
                 clean_word = re.sub(r'[^\w]', '', word)
                 if clean_word:
                     vocab.add(clean_word)
         
         return ['<PAD>', '<UNK>', '<SEP>'] + sorted(list(vocab - {'<PAD>', '<UNK>', '<SEP>'}))
     
-    def _tokenize(self, text): # 이전 코드와 동일
+    def _tokenize(self, text):
         """텍스트 토큰화"""
-        words = re.findall(r'\w+', text.lower()) # 이전 코드 방식 (구두점 제외)
+        words = re.findall(r'\w+', text.lower())
         token_ids = []
         for word in words:
-            # if word in self.word_to_id: # 이 조건은 필요 없음, get의 두번째 인자가 처리
-            #     token_ids.append(self.word_to_id[word])
-            # else:
-            #     token_ids.append(self.word_to_id['<UNK>'])
-            token_ids.append(self.word_to_id.get(word, self.word_to_id['<UNK>'])) # .get() 사용
+            if word in self.word_to_id:
+                token_ids.append(self.word_to_id[word])
+            else:
+                token_ids.append(self.word_to_id['<UNK>'])
         return token_ids
     
-    def __len__(self): # 이전 코드와 동일
+    def __len__(self):
         return len(self.data)
     
-    def __getitem__(self, idx): # 이전 코드와 동일
+    def __getitem__(self, idx):
         example = self.data[idx]
         
         # 입력 구성: story + question
-        story_text = ' '.join(example['story']) # example['story']는 문자열 리스트
+        story_text = ' '.join(example['story'])
         question_text = example['question']
         input_text = f"{story_text} <SEP> {question_text}"
         
@@ -542,33 +511,26 @@ class BabiDataset(Dataset):
         
         # 토큰화
         input_ids = self._tokenize(input_text)
-        answer_ids = self._tokenize(answer_text) # 답변도 토큰화
+        answer_ids = self._tokenize(answer_text)
         
-        # 길이 조정 (이전 코드 방식)
-        # input_ids = input_ids[:self.max_seq_len - 1] # -1은 <SEP> 때문이 아니라, EOS 등을 위한 공간이었을 수 있음.
-                                                      # 하지만 현재 <SEP>는 input_text에 포함됨.
-                                                      # max_seq_len으로 바로 자르는 것이 더 일반적.
-        input_ids = input_ids[:self.max_seq_len] # max_seq_len으로 직접 자르기
-
-        # 패딩 (이전 코드 방식)
-        input_length = len(input_ids) # 자른 후의 실제 길이
-        # 패딩된 input_ids 생성
-        padded_input_ids = input_ids + [self.word_to_id['<PAD>']] * (self.max_seq_len - input_length)
+        # 길이 조정
+        if len(input_ids) > self.max_seq_len - 1:
+            input_ids = input_ids[:self.max_seq_len - 1]
         
-        # 어텐션 마스크 (이전 코드 방식)
-        attention_mask_bool = [True] * input_length + [False] * (self.max_seq_len - input_length) # True:non-pad, False:pad
-
-        # bAbI 답변은 주로 단일 단어. 손실 계산 및 평가를 위해 첫번째 토큰 사용.
-        # answer_ids가 비어있을 경우 (예: 답변이 특수문자만 있어서 _tokenize 후 비었을때) 처리
-        first_answer_token_id = answer_ids[0] if answer_ids else self.word_to_id['<UNK>']
+        # 패딩
+        input_length = len(input_ids)
+        input_ids += [self.word_to_id['<PAD>']] * (self.max_seq_len - len(input_ids))
+        
+        # 어텐션 마스크
+        attention_mask = [1] * input_length + [0] * (self.max_seq_len - input_length)
         
         return {
-            'input_ids': torch.tensor(padded_input_ids, dtype=torch.long),
-            'attention_mask': torch.tensor(attention_mask_bool, dtype=torch.bool), # 모델 forward에서 필요시 ~attention_mask
-            # 'answer_ids' 대신 target_ids 등으로 명확히 하는 것이 좋음
-            'target_ids': torch.tensor([first_answer_token_id], dtype=torch.long), # 일관성을 위해 리스트로 감싸고 텐서화
-            'answer_text': answer_text # 디버깅 및 결과 확인용
+            'input_ids': torch.tensor(input_ids, dtype=torch.long),
+            'attention_mask': torch.tensor(attention_mask, dtype=torch.bool),
+            'answer_ids': torch.tensor(answer_ids, dtype=torch.long),
+            'answer_text': answer_text
         }
+
 
 def train_model(model, train_loader, val_loader, config=CONFIG, device='cuda', model_name="Model"):
     """안전한 모델 학습"""
@@ -956,7 +918,7 @@ def main():
     print("🚀 CONN-TRANS vs STANDARD TRANSFORMER")
     print("🔬 Comprehensive Comparison with Numerical Stability")
     print("=" * 70)
-    print("Task: bAbI Task 1 (Basic Induction)")
+    print("Task: bAbI Task 16 (Basic Induction)")
     print("Models: Pure Conn-Trans | Conn-Trans+FFN | Standard Transformer")
     print("Hardware: RTX 4090 (24GB)")
     print("Safety: Spectral normalization, gradient clipping, NaN detection")
@@ -972,8 +934,8 @@ def main():
     print("\n📦 Data Loading (Updated 2024)...")
     
     try:
-        train_dataset = BabiDataset(task_id=1, split='train')
-        val_dataset = BabiDataset(task_id=1, split='validation')
+        train_dataset = BabiDataset(task_id=16, split='train')
+        val_dataset = BabiDataset(task_id=16, split='validation')
         print("✅ 데이터 로딩 성공")
         
     except Exception as e:
@@ -989,8 +951,8 @@ def main():
         
         # 실험을 중단하지 않고 더미 데이터로 계속 (선택사항)
         print("\n⚠️ 더미 데이터로 아키텍처 테스트 계속 진행")
-        train_dataset = create_dummy_babi_dataset(1000, 1)
-        val_dataset = create_dummy_babi_dataset(200, 1)
+        train_dataset = create_dummy_babi_dataset(1000, 16)
+        val_dataset = create_dummy_babi_dataset(200, 16)
         print("🔧 더미 데이터셋 생성 완료")
     
     train_loader = DataLoader(
@@ -1125,7 +1087,7 @@ def main():
     
     experiment_results = {
         "experiment_type": "comprehensive_comparison_stable_2024",
-        "task": "babi_task1_basic_induction", 
+        "task": "babi_task16_basic_induction", 
         "hardware": "RTX_4090_24GB",
         "data_version": "2024_updated_loading",
         "config": CONFIG,
@@ -1234,7 +1196,7 @@ def main():
     print("🚀 CONN-TRANS vs STANDARD TRANSFORMER")
     print("🔬 Comprehensive Comparison with Numerical Stability")
     print("=" * 70)
-    print("Task: bAbI Task 1 (Basic Induction)")
+    print("Task: bAbI Task 16 (Basic Induction)")
     print("Models: Pure Conn-Trans | Conn-Trans+FFN | Standard Transformer")
     print("Hardware: RTX 4090 (24GB)")
     print("Safety: Spectral normalization, gradient clipping, NaN detection")
@@ -1249,8 +1211,8 @@ def main():
     print("\n📦 Data Loading (Updated 2024)...")
     
     try:
-        train_dataset = BabiDataset(task_id=1, split='train')
-        val_dataset = BabiDataset(task_id=1, split='validation')
+        train_dataset = BabiDataset(task_id=16, split='train')
+        val_dataset = BabiDataset(task_id=16, split='validation')
         print("✅ 데이터 로딩 성공")
         
     except Exception as e:
@@ -1266,8 +1228,8 @@ def main():
         
         # 실험을 중단하지 않고 더미 데이터로 계속 (선택사항)
         print("\n⚠️ 더미 데이터로 아키텍처 테스트 계속 진행")
-        train_dataset = create_dummy_babi_dataset(1000, 1)
-        val_dataset = create_dummy_babi_dataset(200, 1)
+        train_dataset = create_dummy_babi_dataset(1000, 16)
+        val_dataset = create_dummy_babi_dataset(200, 16)
         print("🔧 더미 데이터셋 생성 완료")
     
     train_loader = DataLoader(
@@ -1402,7 +1364,7 @@ def main():
     
     experiment_results = {
         "experiment_type": "comprehensive_comparison_stable",
-        "task": "babi_task1_basic_induction", 
+        "task": "babi_task16_basic_induction", 
         "hardware": "RTX_4090_24GB",
         "config": CONFIG,
         "results": results,
