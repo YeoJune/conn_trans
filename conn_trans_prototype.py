@@ -930,8 +930,8 @@ def main():
         print(f"  🎯 Novel reasoning mechanism demonstrated")
         
         # Parameter efficiency analysis
-        conn_params = next((sum(p.numel() for p in ConnectionTransformer(vocab_size, CONFIG["d_model"], CONFIG["num_slots"], CONFIG["num_reasoning_steps"], CONFIG["seq_len"]).parameters() if p.requires_grad), 0)
-        standard_params = next((sum(p.numel() for p in StandardTransformer(vocab_size, CONFIG["d_model"], 8, CONFIG["num_reasoning_steps"], CONFIG["d_model"]*4, 0.1, CONFIG["seq_len"]).parameters() if p.requires_grad), 0)
+        conn_params = next((sum(p.numel() for p in ConnectionTransformer(vocab_size, CONFIG["d_model"], CONFIG["num_slots"], CONFIG["num_reasoning_steps"], CONFIG["seq_len"]).parameters() if p.requires_grad), 0))
+        standard_params = next((sum(p.numel() for p in StandardTransformer(vocab_size, CONFIG["d_model"], 8, CONFIG["num_reasoning_steps"], CONFIG["d_model"]*4, 0.1, CONFIG["seq_len"]).parameters() if p.requires_grad), 0))
         
         if conn_params > 0 and standard_params > 0:
             efficiency_ratio = standard_params / conn_params
