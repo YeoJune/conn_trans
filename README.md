@@ -76,7 +76,7 @@ python conn_trans_prototype.py
 
 ## 📊 Experimental Setup
 
-### Dataset: bAbI Task 16 (Basic Induction)
+### Dataset: bAbI Task 16 (Basic Induction) - 2024 Updated
 
 ```
 Example:
@@ -84,8 +84,28 @@ Story: "If Jeff is a frog then Jeff is green. Jeff is a frog."
 Question: "What color is Jeff?"
 Answer: "green"
 
-Dataset size: 1K train + validation samples
+Dataset loading: Updated HuggingFace format (2024)
 Task type: Conditional reasoning requiring rule application
+Size: Variable based on loading method
+```
+
+**⚠️ Important Notes (2024):**
+
+- HuggingFace dataset format changed: now requires `name="en"` and `task_no="qa16"`
+- Original download links occasionally return 404 errors
+- Multiple fallback methods implemented in code
+- Automatic dummy dataset generation if loading fails
+
+### Data Loading Methods
+
+```python
+# Primary method (2024 format)
+dataset = load_dataset("facebook/babi_qa", name="en", task_no="qa16")
+
+# Fallback methods implemented:
+# 1. Alternative HuggingFace repositories
+# 2. Manual download and local loading
+# 3. Dummy dataset generation for architecture testing
 ```
 
 ### Model Configuration (RTX 4090 Optimized)

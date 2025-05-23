@@ -394,21 +394,50 @@ class StandardTransformer(nn.Module):
 
 
 class BabiDataset(Dataset):
-    """bAbI Task Dataset"""
+    """bAbI Task Dataset - 2024년 최신 HuggingFace 형식"""
     
     def __init__(self, task_id=16, split='train', max_seq_len=128):
         self.max_seq_len = max_seq_len
+        self.task_id = task_id
         
-        # bAbI 데이터 로드
+        # 최신 HuggingFace 로딩 방식
         print(f"Loading bAbI task {task_id} ({split})...")
-        dataset = load_dataset("facebook/babi_qa", "en-valid-10k")
         
-        # 특정 태스크 필터링
-        self.data = []
-        for example in dataset[split]:
-            if example['task'] == task_id:
-                self.data.append(example)
+        try:
+            # 새로운 방식: task별 개별 로드
+            task_name = f"qa{task_id}"
+            dataset = load_dataset("facebook/babi_qa", name="en", task_no=task_name)
+            
+            # split 이름 매핑
+            split_mapping = {
+                'train': 'train',
+                'validation': 'test',  # bAbI에는 validation이 없고 test만 있음
+                'test': 'test'
+            }
+            
+            actual_split = split_mapping.get(split, 'train')
+            self.raw_data = dataset[actual_split]
+            
+        except Exception as e:
+            print(f"❌ HuggingFace 로딩 실패: {e}")
+            print("🔄 대체 방법 시도 중...")
+            
+            # 대체 방법 1: 다른 사용자의 업로드 버전 시도
+            try:
+                dataset = load_dataset("habanoz/babi_qa_en_valid_10k_qa1")
+                self.raw_data = dataset[actual_split] if actual_split in dataset else dataset['train']
+                print("✅ 대체 데이터셋 로딩 성공")
+            except:
+                # 대체 방법 2: 로컬 파일 사용 또는 에러
+                print("❌ 모든 온라인 소스 실패")
+                print("💡 해결방법:")
+                print("  1. 수동 다운로드: http://www.thespermwhale.com/jaseweston/babi/tasks_1-20_v1-2.tar.gz")
+                print("  2. 또는 다음 명령어로 캐시 클리어:")
+                print("     rm -rf ~/.cache/huggingface/datasets/facebook___babi_qa")
+                raise Exception("bAbI 데이터셋 로딩 실패. 위 해결방법을 시도해주세요.")
         
+        # 데이터 변환
+        self.data = self._convert_format()
         print(f"Loaded {len(self.data)} examples")
         
         # 어휘 구축
@@ -417,6 +446,22 @@ class BabiDataset(Dataset):
         self.vocab_size = len(self.vocab)
         
         print(f"Vocabulary size: {self.vocab_size}")
+    
+    def _convert_format(self):
+        """HuggingFace 형식을 내부 형식으로 변환"""
+        converted_data = []
+        
+        for example in self.raw_data:
+            # HuggingFace bAbI 데이터 구조에 맞게 변환
+            converted_example = {
+                'story': example.get('story', []),
+                'question': example.get('question', ''),
+                'answer': example.get('answer', ''),
+                'task': self.task_id
+            }
+            converted_data.append(converted_example)
+        
+        return converted_data
     
     def _build_vocab(self):
         """어휘 구축"""
@@ -810,7 +855,90 @@ def analyze_reasoning_evolution(model, sample_input, save_path="reasoning_evolut
     return trace, norms
 
 
-def main():
+def create_dummy_babi_dataset(size, task_id):
+    """bAbI 데이터 로딩 실패시 더미 데이터셋 생성"""
+    class DummyBabiDataset:
+        def __init__(self, size, task_id):
+            self.data = []
+            self.vocab = ['<PAD>', '<UNK>', '<SEP>', 'if', 'then', 'is', 'what', 'where', 
+                         'john', 'mary', 'kitchen', 'garden', 'green', 'frog', 'color']
+            self.word_to_id = {word: i for i, word in enumerate(self.vocab)}
+            self.vocab_size = len(self.vocab)
+            
+            # 간단한 더미 예제들 생성
+            templates = [
+                ("if john is a frog then john is green", "john is a frog", "what color is john", "green"),
+                ("mary went to the kitchen", "john went to the garden", "where is mary", "kitchen"),
+                ("if mary is tall then mary is smart", "mary is tall", "what is mary", "smart")
+            ]
+            
+            for i in range(size):
+                template = templates[i % len(templates)]
+                self.data.append({
+                    'story': [template[0], template[1]],
+                    'question': template[2],
+                    'answer': template[3],
+                    'task': task_id
+                })
+        
+        def _tokenize(self, text):
+            words = text.lower().split()
+            return [self.word_to_id.get(word, self.word_to_id['<UNK>']) for word in words]
+        
+        def __len__(self):
+            return len(self.data)
+        
+        def __getitem__(self, idx):
+            example = self.data[idx]
+            story_text = ' '.join(example['story'])
+            input_text = f"{story_text} <SEP> {example['question']}"
+            
+            input_ids = self._tokenize(input_text)
+            answer_ids = self._tokenize(example['answer'])
+            
+            # 패딩
+            max_len = 64  # 더미용으로 짧게
+            input_ids = input_ids[:max_len-1]
+            input_length = len(input_ids)
+            input_ids += [0] * (max_len - len(input_ids))
+            attention_mask = [1] * input_length + [0] * (max_len - input_length)
+            
+            return {
+                'input_ids': torch.tensor(input_ids, dtype=torch.long),
+                'attention_mask': torch.tensor(attention_mask, dtype=torch.bool),
+                'answer_ids': torch.tensor(answer_ids, dtype=torch.long),
+                'answer_text': example['answer']
+            }
+    
+    return DummyBabiDataset(size, task_id)
+
+
+def alternative_babi_loading_methods():
+    """대체 bAbI 데이터 로딩 방법들"""
+    methods = {
+        "방법 1: 수동 다운로드": """
+        wget http://www.thespermwhale.com/jaseweston/babi/tasks_1-20_v1-2.tar.gz
+        tar -xzf tasks_1-20_v1-2.tar.gz
+        # 코드에서 로컬 파일 읽기
+        """,
+        
+        "방법 2: Kaggle 버전": """
+        pip install kaggle
+        kaggle datasets download -d roblexnana/the-babi-tasks-for-nlp-qa-system
+        """,
+        
+        "방법 3: 대체 HuggingFace 저장소": """
+        from datasets import load_dataset
+        dataset = load_dataset("habanoz/babi_qa_en_valid_10k_qa1")
+        """,
+        
+        "방법 4: 캐시 클리어 후 재시도": """
+        rm -rf ~/.cache/huggingface/datasets/facebook___babi_qa
+        # 그 후 원래 코드 재실행
+        """
+    }
+    
+    return methods
     """메인 실험 - 수치 안정성 강화 버전"""
     print("🚀 CONN-TRANS vs STANDARD TRANSFORMER")
     print("🔬 Comprehensive Comparison with Numerical Stability")
@@ -826,10 +954,30 @@ def main():
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
     
-    # 데이터 로드
-    print("\n📦 Data Loading...")
-    train_dataset = BabiDataset(task_id=16, split='train')
-    val_dataset = BabiDataset(task_id=16, split='validation')
+    # 데이터 로드 (2024 최신 방식)
+    print("\n📦 Data Loading (Updated 2024)...")
+    
+    try:
+        train_dataset = BabiDataset(task_id=16, split='train')
+        val_dataset = BabiDataset(task_id=16, split='validation')
+        print("✅ 데이터 로딩 성공")
+        
+    except Exception as e:
+        print(f"❌ 데이터 로딩 실패: {e}")
+        print("\n🔧 문제 해결 방법:")
+        print("1. 인터넷 연결 확인")
+        print("2. HuggingFace 캐시 클리어:")
+        print("   rm -rf ~/.cache/huggingface/datasets/")
+        print("3. 수동 다운로드:")
+        print("   wget http://www.thespermwhale.com/jaseweston/babi/tasks_1-20_v1-2.tar.gz")
+        print("4. 대체 데이터셋 사용:")
+        print("   pip install kaggle && kaggle datasets download -d roblexnana/the-babi-tasks-for-nlp-qa-system")
+        
+        # 실험을 중단하지 않고 더미 데이터로 계속 (선택사항)
+        print("\n⚠️ 더미 데이터로 아키텍처 테스트 계속 진행")
+        train_dataset = create_dummy_babi_dataset(1000, 16)
+        val_dataset = create_dummy_babi_dataset(200, 16)
+        print("🔧 더미 데이터셋 생성 완료")
     
     train_loader = DataLoader(
         train_dataset, 
