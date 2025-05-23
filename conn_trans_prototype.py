@@ -384,13 +384,26 @@ class BabiDataset(Dataset):
         print(f"📚 Vocabulary size: {self.vocab_size}")
         print(f"📝 Dataset size: {len(self.data)}")
     
-    def _convert_format(self):
-        """Convert HuggingFace format to internal format"""
+    def _convert_format(self): # 원본 메소드에서 story 처리만 수정
+        """HuggingFace 형식을 내부 형식으로 변환"""
         converted_data = []
         
-        for example in self.raw_data:
+        for example in self.raw_data: # example은 각 bAbI 문제 세트 (story, question, answer)
+            story_items = example.get('story', []) # story는 dict의 list일 수 있음
+            processed_story_lines = []
+            if isinstance(story_items, list):
+                for item in story_items:
+                    if isinstance(item, dict) and 'text' in item:
+                        processed_story_lines.append(item['text'])
+                    elif isinstance(item, str): # 간혹 story가 단순 문자열 리스트일 경우
+                        processed_story_lines.append(item)
+            # 만약 story_items가 단일 문자열이라면 (거의 없음)
+            elif isinstance(story_items, str):
+                 processed_story_lines.append(story_items)
+
+
             converted_example = {
-                'story': example.get('story', []),
+                'story': processed_story_lines, # 추출된 텍스트 라인들
                 'question': example.get('question', ''),
                 'answer': example.get('answer', ''),
                 'task': self.task_id
@@ -450,39 +463,42 @@ class BabiDataset(Dataset):
     def __len__(self):
         return len(self.data)
     
-    def __getitem__(self, idx):
-        example = self.data[idx]
+    def __getitem__(self, idx): # 원본 메소드 시그니처
+        example = self.data[idx] # 원본 로직
         
-        # Construct input
-        if isinstance(example['story'], list):
-            story_text = ' '.join(example['story'])
-        else:
-            story_text = str(example['story'])
+        # 입력 구성: story + question # 원본 주석
+        story_text = ' '.join(example['story']) # 원본 로직 (example['story']가 문자열 리스트라고 가정)
+        question_text = example['question'] # 원본 로직
+        input_text = f"{story_text} <SEP> {question_text}" # 원본 로직
         
-        question_text = str(example['question'])
-        answer_text = str(example['answer'])
+        # 답변 # 원본 주석
+        answer_text = example['answer'] # 원본 로직
         
-        input_text = f"{story_text} <SEP> {question_text}"
+        # 토큰화 # 원본 주석
+        input_ids = self._tokenize(input_text) # 원본 호출
         
-        # Tokenize
-        input_ids = self._tokenize(input_text)
-        answer_ids = self._tokenize(answer_text)
+        # answer_ids 처리: 비어있을 경우 <UNK> 토큰으로 대체
+        tokenized_answer = self._tokenize(answer_text) # 임시 변수에 저장
+        if not tokenized_answer: # 토큰화 결과가 비어있다면
+            tokenized_answer = [self.word_to_id['<UNK>']] # <UNK> 토큰 ID 리스트로 대체
         
-        # Truncate if necessary
-        if len(input_ids) > self.max_seq_len - 1:
-            input_ids = input_ids[:self.max_seq_len - 1]
+        answer_ids = tokenized_answer # 최종 answer_ids로 사용될 리스트
+
+        # 길이 조정 # 원본 주석
+        if len(input_ids) > self.max_seq_len - 1: # 원본 조건
+            input_ids = input_ids[:self.max_seq_len - 1] # 원본 로직
         
-        # Padding
-        input_length = len(input_ids)
-        input_ids += [self.word_to_id['<PAD>']] * (self.max_seq_len - len(input_ids))
+        # 패딩 # 원본 주석
+        input_length = len(input_ids) # 원본 로직
+        input_ids += [self.word_to_id['<PAD>']] * (self.max_seq_len - len(input_ids)) # 원본 로직
         
-        # Attention mask
-        attention_mask = [1] * input_length + [0] * (self.max_seq_len - input_length)
+        # 어텐션 마스크 # 원본 주석
+        attention_mask = [1] * input_length + [0] * (self.max_seq_len - input_length) # 원본 로직
         
-        return {
+        return { # 원본 dict 구조
             'input_ids': torch.tensor(input_ids, dtype=torch.long),
-            'attention_mask': torch.tensor(attention_mask, dtype=torch.bool),
-            'answer_ids': torch.tensor(answer_ids, dtype=torch.long),
+            'attention_mask': torch.tensor(attention_mask, dtype=torch.bool), # bool로 변환
+            'answer_ids': torch.tensor(answer_ids, dtype=torch.long), # 처리된 answer_ids 사용
             'answer_text': answer_text
         }
 
