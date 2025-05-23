@@ -400,12 +400,13 @@ class BabiDataset(Dataset):
         self.max_seq_len = max_seq_len
         self.task_id = task_id # 생성자에서 받은 task_id 사용
         
-        # HuggingFace 로딩 방식 (name="en-10k", task_no="qa{task_id}" 사용)
-        print(f"Loading bAbI task qa{task_id} (config: en-10k, split: {split})...") # 로그 메시지 수정
+        # HuggingFace 로딩 방식 (name="en-10k-qa1", task_no="{task_id}" 사용)
+        print(f"Loading bAbI task qa{task_id} (config: en-10k-qa1, split: {split})...") # 로그 메시지 수정
         
         try:
-            # name="en-10k"로 고정, task_no는 동적으로 설정
-            dataset = load_dataset("facebook/babi_qa", name="en-10k-qa1", task_no=self.task_id)
+            task_name_hf = self.task_id # task_id를 사용하여 task_name_hf 설정
+            # name="en-10k-qa1"로 고정, task_no는 동적으로 설정
+            dataset = load_dataset("facebook/babi_qa", name="en-10k-qa1", task_no=task_name_hf)
             
             # split 이름 매핑 (이전 코드와 동일)
             split_mapping = {
@@ -419,14 +420,14 @@ class BabiDataset(Dataset):
             if actual_split not in dataset: # actual_split이 dataset dict에 있는지 확인
                 available_splits = list(dataset.keys())
                 raise ValueError(
-                    f"Split '{actual_split}' (mapped from '{split}') not found for bAbI task {task_name_hf} with config 'en-10k'. "
+                    f"Split '{actual_split}' (mapped from '{split}') not found for bAbI task {task_name_hf} with config 'en-10k-qa1'. "
                     f"Available splits: {available_splits}."
                 )
             self.raw_data = dataset[actual_split]
-            print(f"✅ Successfully loaded from facebook/babi_qa (en-10k, {task_name_hf}, {actual_split}).")
+            print(f"✅ Successfully loaded from facebook/babi_qa (en-10k-qa1, {task_name_hf}, {actual_split}).")
             
         except Exception as e:
-            print(f"❌ HuggingFace 로딩 실패 (facebook/babi_qa, en-10k, qa{self.task_id}): {e}")
+            print(f"❌ HuggingFace 로딩 실패 (facebook/babi_qa, en-10k-qa1, qa{self.task_id}): {e}")
             print("🔄 대체 방법 시도 중...") # 이전 코드와 동일
             
             # 대체 방법 1: 다른 사용자의 업로드 버전 시도 (이전 코드와 동일, 실제 사용 시 주의)
