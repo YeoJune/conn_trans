@@ -407,7 +407,7 @@ class BabiDataset(Dataset):
             # task_id를 사용하여 task_name 구성
             task_name_hf = f"qa{self.task_id}" # self.task_id 사용
             # name="en-10k"로 고정, task_no는 동적으로 설정
-            dataset = load_dataset("facebook/babi_qa", name="en-10k-q1", task_no=task_name_hf)
+            dataset = load_dataset("facebook/babi_qa", name="en-10k-qa1", task_no=task_name_hf)
             
             # split 이름 매핑 (이전 코드와 동일)
             split_mapping = {
