@@ -1,4 +1,14 @@
-# Connection Transformer: Improved Formal Specification
+#### Bilinear Connection Matrices
+
+````python
+# Xavier initialization adapted for bilinear connections
+fan_in = d_model
+fan_out = bilinear_rank
+std = math.sqrt(2.0 / (fan_in + fan_out))
+
+W_source = torch.normal(0, std, size=(num_slots, num_slots, d_model, bilinear_rank))
+W_target = torch.normal(0, std, size=(num_slots, num_slots, bilinear_rank, d_model))
+```# Connection Transformer: Improved Formal Specification
 
 ## Abstract
 
@@ -19,10 +29,12 @@ The Connection Transformer (Conn-Trans) is a neural architecture that performs i
 
 ### 1.2 Information Flow Architecture
 
-```
+````
+
 Input Sequence → Compression → Adaptive Reasoning → Expansion → Output Sequence
-    [B,S,D]         ↓             [B,N,D]              ↓         [B,S,D]
-                 Cross-Attn                    Bilinear Connections    Cross-Attn
+[B,S,D] ↓ [B,N,D] ↓ [B,S,D]
+Cross-Attn Bilinear Connections Cross-Attn
+
 ```
 
 **Key Innovation**: Reasoning occurs in a compressed semantic space with **adaptive termination** and **bilinear slot interactions**.
@@ -33,22 +45,24 @@ Input Sequence → Compression → Adaptive Reasoning → Expansion → Output S
 
 ### 2.1 Notation and Definitions
 
-| Symbol | Dimension | Description              |
-| ------ | --------- | ------------------------ |
-| B      | scalar    | Batch size               |
-| S      | scalar    | Sequence length          |
-| D      | scalar    | Model dimension          |
-| N      | scalar    | Number of semantic slots |
-| K      | scalar    | Maximum reasoning steps  |
-| V      | scalar    | Vocabulary size          |
-| r      | scalar    | Bilinear connection rank |
+| Symbol | Dimension | Description               |
+| ------ | --------- | ------------------------- |
+| B      | scalar    | Batch size                |
+| S      | scalar    | Sequence length           |
+| D      | scalar    | Model dimension           |
+| N      | scalar    | Number of semantic slots  |
+| K      | scalar    | Maximum reasoning steps   |
+| V      | scalar    | Vocabulary size           |
+| r      | scalar    | Bilinear connection rank  |
 
 ### 2.2 Core Components
 
 #### Fixed Semantic Slots
 
 ```
+
 H ∈ ℝ^(N × D)
+
 ```
 
 - **Fixed throughout training**: H is initialized randomly and never updated
@@ -59,8 +73,10 @@ H ∈ ℝ^(N × D)
 #### Bilinear Connection Matrices
 
 ```
+
 W_source ∈ ℝ^(N × N × D × r)
 W_target ∈ ℝ^(N × N × r × D)
+
 ```
 
 - **Primary learnable parameters**: Capture complex slot-to-slot transformations
@@ -71,7 +87,9 @@ W_target ∈ ℝ^(N × N × r × D)
 #### Dynamic State
 
 ```
+
 H_state^(t) ∈ ℝ^(B × N × D)
+
 ```
 
 - **Input-dependent**: Different for each sample in the batch
@@ -83,34 +101,42 @@ H_state^(t) ∈ ℝ^(B × N × D)
 #### Step 1: Input Processing
 
 ```
+
 Input: input_ids ∈ ℝ^(B × S)
 
 # Token and positional embeddings
-X_input = TokenEmbedding(input_ids) + PositionalEmbedding(positions)  ∈ ℝ^(B × S × D)
+
+X_input = TokenEmbedding(input_ids) + PositionalEmbedding(positions) ∈ ℝ^(B × S × D)
+
 ```
 
 #### Step 2: Input → Semantic Slot Compression
 
 ```
+
 # Project input and slots for cross-attention
-Q_input = X_input @ W_q^input        ∈ ℝ^(B × S × D)
-K_slots = H @ W_k^slots              ∈ ℝ^(N × D)
-V_input = X_input @ W_v^input        ∈ ℝ^(B × S × D)
+
+Q_input = X_input @ W_q^input ∈ ℝ^(B × S × D)
+K_slots = H @ W_k^slots ∈ ℝ^(N × D)
+V_input = X_input @ W_v^input ∈ ℝ^(B × S × D)
 
 # Compress input sequence into semantic slots
-A_compress = softmax(Q_input @ K_slots^T / √D)    ∈ ℝ^(B × S × N)
-IR_activation = A_compress^T @ V_input            ∈ ℝ^(B × N × D)
+
+A_compress = softmax(Q_input @ K_slots^T / √D) ∈ ℝ^(B × S × N)
+IR_activation = A_compress^T @ V_input ∈ ℝ^(B × N × D)
 
 # Initialize reasoning state
-H_state^(0) = H.expand(B, -1, -1) + IR_activation    ∈ ℝ^(B × N × D)
+
+H_state^(0) = H.expand(B, -1, -1) + IR_activation ∈ ℝ^(B × N × D)
+
 ```
 
 #### Step 3: Adaptive Bilinear Reasoning
 
 ```
-For t = 1, 2, ..., K_max:
-    # Compute bilinear slot-to-slot influences
-    Influence^(t) = BilinearTransform(H_state^(t-1), W_source, W_target)
+
+For t = 1, 2, ..., K_max: # Compute bilinear slot-to-slot influences
+Influence^(t) = BilinearTransform(H_state^(t-1), W_source, W_target)
 
     # Apply ReLU activation (neuronal firing threshold)
     ΔH^(t) = ReLU(Influence^(t))                     ∈ ℝ^(B × N × D)
@@ -129,14 +155,16 @@ For t = 1, 2, ..., K_max:
         K_actual = t
         Break  # All slots have converged
 
-K_actual = min(t, K_max)  # Actual reasoning steps used
+
+K_actual = min(t, K_max) # Actual reasoning steps used
+
 ```
 
 **BilinearTransform Function**:
-
 ```
+
 Function BilinearTransform(H_state, W_source, W_target):
-    Influence = zeros_like(H_state)                  ∈ ℝ^(B × N × D)
+Influence = zeros_like(H_state) ∈ ℝ^(B × N × D)
 
     For i = 1 to N:
         For j = 1 to N:
@@ -147,22 +175,28 @@ Function BilinearTransform(H_state, W_source, W_target):
                 Influence[:,j,:] += transformed
 
     Return Influence
+
 ```
 
 #### Step 4: Semantic Slot → Output Expansion
 
 ```
+
 # Project for output cross-attention
-Q_output = X_input @ W_q^output          ∈ ℝ^(B × S × D)
+
+Q_output = X_input @ W_q^output ∈ ℝ^(B × S × D)
 K_final = H_state^(K_actual) @ W_k^final ∈ ℝ^(B × N × D)
 V_final = H_state^(K_actual) @ W_v^final ∈ ℝ^(B × N × D)
 
 # Expand semantic slots back to sequence
-A_expand = softmax(Q_output @ K_final^T / √D)    ∈ ℝ^(B × S × N)
-Y_output = A_expand @ V_final                    ∈ ℝ^(B × S × D)
+
+A_expand = softmax(Q_output @ K_final^T / √D) ∈ ℝ^(B × S × N)
+Y_output = A_expand @ V_final ∈ ℝ^(B × S × D)
 
 # Generate vocabulary logits
-logits = Y_output @ W_vocab                      ∈ ℝ^(B × S × V)
+
+logits = Y_output @ W_vocab ∈ ℝ^(B × S × V)
+
 ```
 
 ### 2.4 Parameter Analysis
@@ -170,13 +204,15 @@ logits = Y_output @ W_vocab                      ∈ ℝ^(B × S × V)
 #### Total Parameters
 
 ```
-Fixed slots (H):              N × D              [not trainable]
-Bilinear connections:         2 × N² × D × r     [W_source + W_target]
-Attention projections:        6 × D × D          [Cross-attention matrices]
-Embeddings:                   (V + S) × D        [Token + positional]
-Vocabulary projection:        D × V              [Output layer]
 
-Total learnable parameters:   2N²Dr + 6D² + (V + S + D)D
+Fixed slots (H): N × D [not trainable]
+Bilinear connections: 2 × N² × D × r [W_source + W_target]
+Attention projections: 6 × D × D [Cross-attention matrices]
+Embeddings: (V + S) × D [Token + positional]
+Vocabulary projection: D × V [Output layer]
+
+Total learnable parameters: 2N²Dr + 6D² + (V + S + D)D
+
 ```
 
 #### Efficiency Analysis
@@ -184,13 +220,15 @@ Total learnable parameters:   2N²Dr + 6D² + (V + S + D)D
 For typical values (N=128, D=256, r=32, S=512, V=50000):
 
 ```
-Bilinear connections:    2 × 128² × 256 × 32 ≈ 268M
-Standard components:     6 × 256² + (50000 + 512 + 256) × 256 ≈ 13M
-Total:                   ≈ 281M parameters
+
+Bilinear connections: 2 × 128² × 256 × 32 ≈ 268M
+Standard components: 6 × 256² + (50000 + 512 + 256) × 256 ≈ 13M
+Total: ≈ 281M parameters
 
 Comparison with 6-layer Transformer:
-Standard Transformer:    6 × 12 × 256² ≈ 47M (without embeddings)
-Connection Transformer:  ≈ 281M (with rich bilinear connections)
+Standard Transformer: 6 × 12 × 256² ≈ 47M (without embeddings)
+Connection Transformer: ≈ 281M (with rich bilinear connections)
+
 ```
 
 **Trade-off**: More parameters for explicit, interpretable reasoning patterns.
@@ -204,21 +242,25 @@ Connection Transformer:  ≈ 281M (with rich bilinear connections)
 The adaptive reasoning process can be analyzed as a **convergence-based dynamical system**:
 
 ```
+
 H_state^(t) = H_state^(t-1) + ReLU(BilinearTransform(H_state^(t-1)))
+
 ```
 
 #### Convergence Criteria
 
-- **Local Convergence**: ||ΔH^(t)||\_2 < τ for each slot independently
+- **Local Convergence**: ||ΔH^(t)||_2 < τ for each slot independently
 - **Global Convergence**: All slots reach local convergence simultaneously
 - **Guaranteed Termination**: K_actual ≤ K_max ensures bounded computation
 
 #### Computational Complexity
 
 ```
-Best case (simple inputs):    O(1 × BN²Dr)     # Early convergence
-Average case:                 O(K_avg × BN²Dr)  # K_avg ≪ K_max
-Worst case:                   O(K_max × BN²Dr)  # Maximum steps
+
+Best case (simple inputs): O(1 × BN²Dr) # Early convergence
+Average case: O(K_avg × BN²Dr) # K_avg ≪ K_max
+Worst case: O(K_max × BN²Dr) # Maximum steps
+
 ```
 
 ### 3.2 Bilinear Connection Expressiveness
@@ -228,24 +270,25 @@ Worst case:                   O(K_max × BN²Dr)  # Maximum steps
 Each bilinear connection (i,j) can express:
 
 ```
-f_{i→j}(h_i) = W_target[i,j] @ (W_source[i,j]^T @ h_i)
-```
+
+f\_{i→j}(h_i) = W_target[i,j] @ (W_source[i,j]^T @ h_i)
+
+````
 
 This enables:
-
 - **Cross-dimensional interactions**: Input dimensions mix in intermediate space
 - **Nonlinear transformations**: Beyond simple scaling or rotation
 - **Rank-controlled complexity**: Parameter r balances expressiveness vs efficiency
 
 #### Comparison with Linear Connections
 
-| Aspect           | Linear (C ∈ ℝ^(N×N)) | Bilinear (rank r)    |
-| ---------------- | -------------------- | -------------------- |
-| Parameters       | N²                   | 2N²Dr                |
-| Transformation   | h*i × c*{ij}         | W₂ @ (W₁^T @ h_i)    |
-| Cross-dim mixing | No                   | Yes                  |
-| Expressiveness   | Limited              | Rich (r-dimensional) |
-| Constraints      | N = D required       | N, D independent     |
+| Aspect | Linear (C ∈ ℝ^(N×N)) | Bilinear (rank r) |
+|--------|----------------------|-------------------|
+| Parameters | N² | 2N²Dr |
+| Transformation | h_i × c_{ij} | W₂ @ (W₁^T @ h_i) |
+| Cross-dim mixing | No | Yes |
+| Expressiveness | Limited | Rich (r-dimensional) |
+| Constraints | N = D required | N, D independent |
 
 ---
 
@@ -261,7 +304,7 @@ num_slots = 128        # Number of semantic slots (can differ from d_model)
 bilinear_rank = 32     # Rank of bilinear connections
 max_reasoning_steps = 8 # Maximum adaptive reasoning steps
 convergence_threshold = 0.01  # Threshold for adaptive termination
-```
+````
 
 #### Training Parameters
 
@@ -290,9 +333,26 @@ W_target = torch.normal(0, std, size=(num_slots, num_slots, bilinear_rank, d_mod
 #### Semantic Slots
 
 ```python
-# Fixed random initialization (never updated)
-H = torch.normal(0, 1, size=(num_slots, d_model))
-H = F.normalize(H, dim=-1)  # Unit norm initialization
+# Orthogonal initialization for independent semantic spaces
+def create_orthogonal_slots(N, D):
+    """Create orthogonal semantic slots ensuring independence"""
+    if N <= D:
+        # Perfect orthogonality when N ≤ D
+        Q, _ = torch.qr(torch.randn(D, N))
+        H = Q.T  # (N, D) with H @ H.T = I_N
+    else:
+        # Partial orthogonality for N > D
+        H = torch.zeros(N, D)
+        for i in range(0, N, D):
+            end = min(i + D, N)
+            group_size = end - i
+            Q, _ = torch.qr(torch.randn(D, group_size))
+            H[i:end] = Q.T
+
+    return H
+
+# Fixed semantic slots (never updated during training)
+H = create_orthogonal_slots(num_slots, d_model)
 ```
 
 ### 4.3 Training Considerations
@@ -483,9 +543,8 @@ class ImprovedConnectionTransformer(nn.Module):
         self.token_embedding = nn.Embedding(vocab_size, d_model)
         self.pos_embedding = nn.Embedding(max_seq_len, d_model)
 
-        # Fixed semantic slots (H) - never updated
-        self.register_buffer('H', F.normalize(
-            torch.normal(0, 1, size=(num_slots, d_model)), dim=-1))
+        # Fixed semantic slots (H) - never updated, orthogonal initialization
+        self.register_buffer('H', self._create_orthogonal_slots(num_slots, d_model))
 
         # Bilinear connection matrices - primary learnable parameters
         self.W_source = nn.Parameter(torch.normal(0, 0.02,
@@ -512,6 +571,28 @@ class ImprovedConnectionTransformer(nn.Module):
 
         # Initialize parameters
         self._init_parameters()
+
+    def _create_orthogonal_slots(self, num_slots, d_model):
+        """
+        Create orthogonal semantic slots for independent semantic spaces.
+
+        Returns:
+            H: [num_slots, d_model] orthogonal matrix
+        """
+        if num_slots <= d_model:
+            # Perfect orthogonality when num_slots ≤ d_model
+            Q, _ = torch.qr(torch.randn(d_model, num_slots))
+            H = Q.T  # (num_slots, d_model)
+        else:
+            # Partial orthogonality for num_slots > d_model
+            H = torch.zeros(num_slots, d_model)
+            for start in range(0, num_slots, d_model):
+                end = min(start + d_model, num_slots)
+                group_size = end - start
+                Q, _ = torch.qr(torch.randn(d_model, group_size))
+                H[start:end] = Q.T
+
+        return H
 
     def _init_parameters(self):
         """Initialize parameters according to specification"""
