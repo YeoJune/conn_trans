@@ -99,7 +99,10 @@ class BaselineTransformer(nn.Module):
         if attention_mask is not None:
             # input attention_mask: [B, S], True for valid tokens
             # transformer needs: [B, S], True for tokens to mask (ignore)
-            src_key_padding_mask = ~attention_mask
+            if attention_mask.dtype != torch.bool:
+                src_key_padding_mask = (attention_mask == 0)
+            else:
+                src_key_padding_mask = ~attention_mask
         else:
             src_key_padding_mask = None
         
