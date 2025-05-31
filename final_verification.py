@@ -172,9 +172,9 @@ def test_corrected_training():
         seq_len = 10
         vocab_size = tokenizer.vocab_size
         
-        input_ids = torch.randint(0, vocab_size, (batch_size, seq_len))
-        attention_mask = torch.ones(batch_size, seq_len, dtype=torch.bool)
-        labels = torch.randint(0, vocab_size, (batch_size, seq_len))
+        input_ids = torch.randint(0, vocab_size, (batch_size, seq_len)).to(trainer.device)
+        attention_mask = torch.ones(batch_size, seq_len, dtype=torch.bool).to(trainer.device)
+        labels = torch.randint(0, vocab_size, (batch_size, seq_len)).to(trainer.device)
         
         with torch.no_grad():
             logits, reasoning_info = model(input_ids, attention_mask, return_reasoning_trace=True)
