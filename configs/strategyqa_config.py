@@ -1,47 +1,40 @@
 # configs/strategyqa_config.py
+
 from .base_config import BaseConfig
 
-def get_config(model_size="base"):
-    """StrategyQA 실험용 설정 - RTX 4090 최적화"""
+def get_config(model_size="nano"):  # StrategyQA는 기본 nano
+    """StrategyQA 실험용 설정"""
     config = BaseConfig()
     
+    # 모델 크기 설정 (StrategyQA는 데이터가 가장 적어서 nano 기본)
+    if model_size == "micro" and model_size != "nano":
+        print("⚠️ Warning: StrategyQA 데이터가 매우 적습니다. nano 모델 권장.")
+    
+    config.set_model_size(model_size)
+    
+    # StrategyQA 특화 설정
     config.update(
-        # 데이터 설정
-        dataset_name="strategyqa", 
+        dataset_name="strategyqa",
         task_prefix="strategy",
-        max_seq_len=256,
-        batch_size=20,       # Yes/No 문제라 배치 크게
-        gradient_accumulation_steps=2,  # 실질적 batch = 40
         
-        # StrategyQA 특화
-        num_epochs=10,
-        learning_rate=1.5e-4,  # 조금 큰 학습률
-        warmup_ratio=0.12,
-        max_reasoning_steps=4,   # 전략적 추론
+        # 시퀀스 길이 (Yes/No 질문은 짧음)
+        max_seq_len=96,
+        answer_max_length=8,   # "Yes" or "No" + 짧은 설명
+        question_max_length=88,
         
-        # StrategyQA 특수 설정
-        answer_max_length=16,    # Yes/No + 짧은 설명
-        question_max_length=240
+        # 극강 정규화 (데이터가 가장 적음)
+        dropout=0.4,
+        weight_decay=0.2,
+        learning_rate=1e-5 if model_size == "nano" else 2e-5,
+        
+        # 매우 빠른 종료
+        num_epochs=2,
+        early_stopping_patience=2,
+        eval_every=20,
     )
     
-    if model_size == "large":
-        config.update(
-            d_model=512,
-            num_slots=96,
-            bilinear_rank=24,
-            batch_size=10,
-            gradient_accumulation_steps=4,  # 실질적 batch = 40
-            max_reasoning_steps=6
-        )
-    elif model_size == "small":
-        config.update(
-            d_model=128,
-            num_slots=32,
-            bilinear_rank=8,
-            batch_size=40,
-            max_reasoning_steps=3,
-            num_epochs=6
-        )
-    
+    # 모델 정보 출력
     config.print_model_info()
+    config.analyze_overfitting_risk(2780)  # StrategyQA total size
+    
     return config

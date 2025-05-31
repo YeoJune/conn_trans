@@ -10,6 +10,7 @@ from dataset.tokenizer_utils import get_tokenizer_and_dataset
 import configs.logiqa_config as logiqa_cfg
 import configs.gsm8k_config as gsm8k_cfg
 import configs.strategyqa_config as strategyqa_cfg
+import configs.multinli_config as multinli_cfg  # ✅ MultiNLI 추가
 
 def setup_environment():
     """환경 설정"""
@@ -32,11 +33,19 @@ def setup_environment():
 
 def main():
     parser = argparse.ArgumentParser(description="Connection Transformer Experiments")
-    parser.add_argument("--dataset", choices=["logiqa", "gsm8k", "strategyqa"], required=True,
+    
+    # ✅ 업데이트된 선택지들
+    parser.add_argument("--dataset", 
+                       choices=["logiqa", "gsm8k", "strategyqa", "multinli"], 
+                       required=True,
                        help="Dataset to use for training")
-    parser.add_argument("--model", choices=["connection", "baseline"], required=True,
+    parser.add_argument("--model", 
+                       choices=["connection", "baseline"], 
+                       required=True,
                        help="Model type to train")
-    parser.add_argument("--model_size", choices=["base", "large"], default="base",
+    parser.add_argument("--model_size", 
+                       choices=["nano", "micro", "tiny", "small", "base"], 
+                       default="micro",  # ✅ 안전한 기본값
                        help="Model size configuration")
     parser.add_argument("--resume", type=str, default=None,
                        help="Path to checkpoint to resume from")
@@ -55,17 +64,34 @@ def main():
         os.makedirs(args.output_dir, exist_ok=True)
         print(f"📁 Output directory: {args.output_dir}")
     
-    # Config 선택
+    # ✅ 업데이트된 Config 선택 (MultiNLI 추가)
     config_map = {
         "logiqa": logiqa_cfg,
         "gsm8k": gsm8k_cfg,
-        "strategyqa": strategyqa_cfg
+        "strategyqa": strategyqa_cfg,
+        "multinli": multinli_cfg  # ✅ 새로 추가
     }
     
     if args.dataset not in config_map:
-        raise ValueError(f"Unknown dataset: {args.dataset}")
+        available = list(config_map.keys())
+        raise ValueError(f"Unknown dataset: {args.dataset}. Available: {available}")
+    
+    # ✅ 데이터셋별 권장 모델 사이즈 체크
+    recommendations = {
+        "strategyqa": ["nano", "micro"],
+        "logiqa": ["micro", "tiny"], 
+        "gsm8k": ["micro", "tiny"],
+        "multinli": ["tiny", "small", "base"]  # 큰 데이터셋
+    }
+    
+    if args.model_size not in recommendations[args.dataset]:
+        recommended = ", ".join(recommendations[args.dataset])
+        print(f"⚠️ Warning: {args.model_size} model on {args.dataset} may overfit!")
+        print(f"   Recommended sizes for {args.dataset}: {recommended}")
+        print(f"   Continuing anyway...")
     
     config = config_map[args.dataset].get_config(model_size=args.model_size)
+    
     print(f"\n📋 Configuration for {args.dataset} ({args.model_size}):")
     print(f"   Model: {args.model}")
     print(f"   d_model: {config.d_model}")
@@ -74,6 +100,7 @@ def main():
     print(f"   max_reasoning_steps: {config.max_reasoning_steps}")
     print(f"   batch_size: {config.batch_size}")
     print(f"   learning_rate: {config.learning_rate}")
+    print(f"   num_epochs: {config.num_epochs}")
     
     # 토크나이저 & 데이터셋 생성
     print(f"\n🔄 Loading data and tokenizer...")
@@ -94,7 +121,8 @@ def main():
             max_reasoning_steps=config.max_reasoning_steps,
             convergence_threshold=config.convergence_threshold,
             max_seq_len=config.max_seq_len,
-            dropout=getattr(config, 'dropout', 0.1)
+            dropout=getattr(config, 'dropout', 0.1),
+            pad_token_id=tokenizer.pad_token_id
         )
         
     elif args.model == "baseline":
@@ -108,7 +136,8 @@ def main():
             num_layers=baseline_config['num_layers'],
             ffn_multiplier=baseline_config['ffn_multiplier'],
             max_seq_len=config.max_seq_len,
-            dropout=getattr(config, 'dropout', 0.1)
+            dropout=getattr(config, 'dropout', 0.1),
+            pad_token_id=tokenizer.pad_token_id
         )
         
         # 설정에 baseline 정보 추가
@@ -123,8 +152,8 @@ def main():
     
     trainer = Trainer(model, config, model_type=args.model)
     
-    # Tokenizer를 trainer에 설정 (예측 생성용)
-    trainer.tokenizer = tokenizer
+    # Tokenizer를 trainer에 설정
+    trainer.set_tokenizer(tokenizer)
     
     best_accuracy = trainer.train(
         train_dataset, 
@@ -135,33 +164,44 @@ def main():
     print(f"\n✅ Training completed!")
     print(f"   Dataset: {args.dataset}")
     print(f"   Model: {args.model}")
+    print(f"   Model size: {args.model_size}")
     print(f"   Best accuracy: {best_accuracy:.4f}")
     
     # 추가 분석 (Connection Transformer만)
     if args.model == "connection":
         print(f"\n🔍 Analyzing connection patterns...")
-        from utils.visualization import visualize_connection_matrix, analyze_reasoning_patterns
         
-        if not args.no_save:
-            # Connection matrix 시각화
-            visualize_connection_matrix(
-                model, 
-                save_path=os.path.join(args.output_dir, f"connection_matrix_{args.dataset}_{args.model_size}.png"),
-                title_suffix=f" ({args.dataset})"
-            )
-            
-            # 추론 패턴 분석
-            analyze_reasoning_patterns(
-                model,
-                save_path=os.path.join(args.output_dir, f"reasoning_patterns_{args.dataset}_{args.model_size}.png")
-            )
-        
-        # Connection 통계 출력
+        # Connection 통계 출력 (시각화는 선택적)
         analysis = model.get_connection_analysis()
         print(f"   Connection Statistics:")
         print(f"     Max strength: {analysis['max_connection']:.4f}")
         print(f"     Mean strength: {analysis['mean_connection']:.4f}")
         print(f"     Sparsity ratio: {analysis['sparsity_ratio']:.2%}")
+        if 'orthogonality_quality' in analysis:
+            print(f"     Orthogonality quality: {analysis['orthogonality_quality']:.4f}")
+        
+        # 시각화 (utils가 있는 경우에만)
+        if not args.no_save:
+            try:
+                from utils.visualization import visualize_connection_matrix, analyze_reasoning_patterns
+                
+                # Connection matrix 시각화
+                visualize_connection_matrix(
+                    model, 
+                    save_path=os.path.join(args.output_dir, f"connection_matrix_{args.dataset}_{args.model_size}.png"),
+                    title_suffix=f" ({args.dataset})"
+                )
+                
+                # 추론 패턴 분석
+                analyze_reasoning_patterns(
+                    model,
+                    save_path=os.path.join(args.output_dir, f"reasoning_patterns_{args.dataset}_{args.model_size}.png")
+                )
+                
+                print(f"   📊 Visualizations saved to {args.output_dir}")
+                
+            except ImportError:
+                print(f"   ⚠️ Visualization utils not available, skipping plots")
 
 if __name__ == "__main__":
     main()
