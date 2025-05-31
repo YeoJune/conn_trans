@@ -90,9 +90,10 @@ class LogiQADataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx):
+        """T5 모델에 맞는 전처리 개선"""
         item = self.data[idx]
         
-        # 입력 토크나이징 (T5 방식)
+        # 입력 토크나이징 (T5 encoder 입력)
         inputs = self.tokenizer(
             item['input_text'],
             max_length=self.max_length,
@@ -101,7 +102,8 @@ class LogiQADataset(Dataset):
             return_tensors='pt'
         )
         
-        # 타겟 토크나이징
+        # 타겟 토크나이징 (T5 decoder 출력)
+        # T5에서는 decoder_input_ids가 labels보다 1 짧음 (<pad> 토큰으로 시작)
         targets = self.tokenizer(
             item['target_text'],
             max_length=self.answer_max_length,

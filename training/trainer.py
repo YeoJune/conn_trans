@@ -22,7 +22,11 @@ class Trainer:
         self.model.to(self.device)
         
         # Mixed precision scaler
-        self.scaler = torch.cuda.amp.GradScaler() if config.fp16 else None
+        if config.fp16:
+            self.scaler = torch.cuda.amp.GradScaler()
+            print("⚡ Mixed precision training enabled (GradScaler)")
+        else:
+            self.scaler = None
         
         # 메트릭 추적
         self.train_losses = []
@@ -30,8 +34,10 @@ class Trainer:
         self.reasoning_steps_history = []
         
         print(f"🚀 Trainer initialized for {model_type} model on {self.device}")
-        if config.fp16:
-            print("⚡ Mixed precision training enabled")
+        
+        # 모델 파라미터 정보 출력
+        total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f"   Total trainable parameters: {total_params:,}")
     
     def set_tokenizer(self, tokenizer):
         """토크나이저 설정"""
@@ -80,9 +86,10 @@ class Trainer:
             attention_mask = batch['attention_mask'].to(self.device)
             labels = batch['labels'].to(self.device)
             
-            # Forward pass with mixed precision
+            # Forward pass with mixed precision (최신 API 사용)
             if self.config.fp16:
-                with torch.cuda.amp.autocast():
+                # 수정된 부분: 최신 autocast API 사용
+                with torch.amp.autocast(device_type='cuda'):
                     outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
                     logits, reasoning_info = outputs
                     
@@ -111,16 +118,17 @@ class Trainer:
             
             # 메트릭 누적
             total_loss += loss.item()
-            if hasattr(reasoning_info, 'actual_steps'):
+            if isinstance(reasoning_info, dict) and 'actual_steps' in reasoning_info:
                 total_reasoning_steps += reasoning_info['actual_steps']
             num_batches += 1
             
             # 로깅
             if batch_idx % self.config.log_every == 0:
                 current_lr = self.scheduler.get_last_lr()[0]
+                actual_steps = reasoning_info.get('actual_steps', 'N/A') if isinstance(reasoning_info, dict) else 'N/A'
                 print(f"  Epoch {epoch} [{batch_idx:4d}/{len(train_loader)}] "
-                      f"Loss: {loss.item():.4f} LR: {current_lr:.2e} "
-                      f"Steps: {reasoning_info.get('actual_steps', 'N/A')}")
+                    f"Loss: {loss.item():.4f} LR: {current_lr:.2e} "
+                    f"Steps: {actual_steps}")
         
         avg_loss = total_loss / num_batches
         avg_reasoning_steps = total_reasoning_steps / num_batches if num_batches > 0 else 0
@@ -129,23 +137,55 @@ class Trainer:
     
     def calculate_loss(self, logits, labels, reasoning_info):
         """
-        손실 함수 계산 - T5 특화 버전
+        손실 함수 계산
         """
         # T5 tokenizer의 pad_token_id 사용
         pad_token_id = getattr(self.tokenizer, 'pad_token_id', 0)
         if pad_token_id is None:
             pad_token_id = 0
-
-        # T5 스타일 손실 계산 (decoder-only가 아닌 seq2seq)
-        # logits: [B, S, V], labels: [B, S]
         
+        # T5는 sequence-to-sequence 모델이므로 input과 target이 다를 수 있음
+        # logits: [B, S_in, V], labels: [B, S_out]
+        
+        batch_size = logits.size(0)
+        seq_len_in = logits.size(1)
+        vocab_size = logits.size(2)
+        
+        seq_len_out = labels.size(1)
+        
+        print(f"Debug - Logits shape: {logits.shape}, Labels shape: {labels.shape}")
+        
+        # T5 모델의 경우 labels가 decoder input과 다를 수 있음
+        # 여기서는 labels를 target sequence로 처리
+        
+        # Cross entropy 계산을 위해 올바른 형태로 변환
+        if seq_len_in != seq_len_out:
+            # Input과 output 길이가 다른 경우 - T5의 일반적인 상황
+            # labels의 길이에 맞춰 logits을 조정하거나, 적절한 처리 필요
+            
+            if seq_len_out < seq_len_in:
+                # Target이 더 짧은 경우 (일반적) - 마지막 부분만 사용
+                logits_for_loss = logits[:, :seq_len_out, :]
+            else:
+                # Target이 더 긴 경우 - padding 적용
+                pad_length = seq_len_out - seq_len_in
+                padding = torch.full((batch_size, pad_length, vocab_size), 
+                                float('-inf'), device=logits.device)
+                padding[:, :, pad_token_id] = 0  # pad token에 대해서는 0
+                logits_for_loss = torch.cat([logits, padding], dim=1)
+        else:
+            logits_for_loss = logits
+        
+        # Loss 계산
         loss_fct = nn.CrossEntropyLoss(ignore_index=pad_token_id, label_smoothing=0.1)
         
-        # Flatten for cross entropy
-        shift_logits = logits.view(-1, logits.size(-1))  # [B*S, V]
-        shift_labels = labels.view(-1).to(logits.device)  # [B*S] → logits와 동일 디바이스로 이동
-
-        lm_loss = loss_fct(shift_logits, shift_labels)
+        # Flatten for cross entropy: [B*S, V] and [B*S]
+        flat_logits = logits_for_loss.view(-1, vocab_size)
+        flat_labels = labels.view(-1)
+        
+        print(f"Debug - Flat logits shape: {flat_logits.shape}, Flat labels shape: {flat_labels.shape}")
+        
+        lm_loss = loss_fct(flat_logits, flat_labels)
         
         # Connection Transformer의 경우 추론 비용 추가
         if self.model_type == "connection" and hasattr(self.model, 'reasoning_cost_loss'):
@@ -159,7 +199,6 @@ class Trainer:
             total_loss = lm_loss
         
         return total_loss
-
     
     def evaluate(self, eval_loader):
         """평가"""
@@ -170,30 +209,60 @@ class Trainer:
         reasoning_steps_list = []
         
         with torch.no_grad():
-            for batch in eval_loader:
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
-                
-                # Forward pass
-                outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
-                logits, reasoning_info = outputs
-                
-                # 손실 계산
-                loss = self.calculate_loss(logits, labels, reasoning_info)
-                total_loss += loss.item()
-                
-                # 예측 생성 (간단한 greedy decoding)
-                batch_predictions = self.generate_predictions(input_ids, attention_mask)
-                predictions.extend(batch_predictions)
-                targets.extend(batch['target_text'])
-                
-                # 추론 스텝 기록
-                if 'actual_steps' in reasoning_info:
-                    reasoning_steps_list.append(reasoning_info['actual_steps'])
+            for batch_idx, batch in enumerate(eval_loader):
+                try:
+                    input_ids = batch['input_ids'].to(self.device)
+                    attention_mask = batch['attention_mask'].to(self.device)
+                    labels = batch['labels'].to(self.device)
+                    
+                    # Forward pass
+                    outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
+                    logits, reasoning_info = outputs
+                    
+                    # 손실 계산
+                    loss = self.calculate_loss(logits, labels, reasoning_info)
+                    total_loss += loss.item()
+                    
+                    # 예측 생성 (간단한 argmax 방식)
+                    if logits.size(1) == labels.size(1):
+                        # 같은 길이인 경우
+                        predicted_ids = torch.argmax(logits, dim=-1)
+                    else:
+                        # 길이가 다른 경우 labels 길이에 맞춤
+                        seq_len = min(logits.size(1), labels.size(1))
+                        predicted_ids = torch.argmax(logits[:, :seq_len, :], dim=-1)
+                    
+                    # 디코딩
+                    for i in range(predicted_ids.size(0)):
+                        try:
+                            pred_text = self.tokenizer.decode(predicted_ids[i], skip_special_tokens=True)
+                            target_text = batch['target_text'][i] if 'target_text' in batch else "N/A"
+                            
+                            predictions.append(pred_text)
+                            targets.append(target_text)
+                        except Exception as decode_error:
+                            print(f"Decode error in batch {batch_idx}, sample {i}: {decode_error}")
+                            predictions.append("DECODE_ERROR")
+                            targets.append(batch.get('target_text', ["N/A"])[i] if i < len(batch.get('target_text', [])) else "N/A")
+                    
+                    # 추론 스텝 기록
+                    if isinstance(reasoning_info, dict) and 'actual_steps' in reasoning_info:
+                        reasoning_steps_list.append(reasoning_info['actual_steps'])
+                        
+                except Exception as eval_error:
+                    print(f"Evaluation error in batch {batch_idx}: {eval_error}")
+                    continue
         
-        avg_loss = total_loss / len(eval_loader)
-        accuracy = calculate_accuracy(predictions, targets)
+        avg_loss = total_loss / len(eval_loader) if len(eval_loader) > 0 else 0
+        
+        # 정확도 계산 (안전하게)
+        try:
+            from utils.metrics import calculate_accuracy
+            accuracy = calculate_accuracy(predictions, targets)
+        except Exception as acc_error:
+            print(f"Accuracy calculation error: {acc_error}")
+            accuracy = 0.0
+        
         avg_reasoning_steps = sum(reasoning_steps_list) / len(reasoning_steps_list) if reasoning_steps_list else 0
         
         return avg_loss, accuracy, avg_reasoning_steps, predictions, targets

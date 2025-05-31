@@ -7,28 +7,21 @@ from .strategyqa_dataset import StrategyQADataset
 def get_tokenizer_and_dataset(dataset_name, config):
     """
     토크나이저와 데이터셋을 함께 반환
-    
-    Args:
-        dataset_name: str - "logiqa", "gsm8k", "strategyqa"
-        config: 설정 객체
-        
-    Returns:
-        tokenizer, train_dataset, eval_dataset
     """
     
-    # T5 토크나이저만 사용 (연구에서 명시된 방식)
+    # T5 토크나이저 생성 (legacy=False로 설정하여 최신 방식 사용)
     print(f"🔄 Loading tokenizer: {config.tokenizer_name}")
     
     try:
+        # 최신 T5 토크나이저 사용 (legacy=False)
+        tokenizer = T5Tokenizer.from_pretrained(
+            config.tokenizer_name, 
+            legacy=False  # 최신 동작 방식 사용
+        )
+        print(f"✅ Using modern T5Tokenizer (legacy=False)")
+    except Exception as e:
+        print(f"⚠️ Modern tokenizer failed, falling back to legacy mode: {e}")
         tokenizer = T5Tokenizer.from_pretrained(config.tokenizer_name)
-    except ImportError as e:
-        if "sentencepiece" in str(e).lower():
-            raise ImportError(
-                "T5Tokenizer requires SentencePiece. Please install it:\n"
-                "pip install sentencepiece>=0.1.97"
-            ) from e
-        else:
-            raise e
     
     # 패딩 토큰 확인 및 설정
     if tokenizer.pad_token is None:
@@ -38,9 +31,8 @@ def get_tokenizer_and_dataset(dataset_name, config):
     print(f"✅ Tokenizer loaded. Vocab size: {tokenizer.vocab_size:,}")
     print(f"   Pad token: {tokenizer.pad_token} (id: {tokenizer.pad_token_id})")
     print(f"   EOS token: {tokenizer.eos_token} (id: {tokenizer.eos_token_id})")
-    print(f"   UNK token: {tokenizer.unk_token} (id: {tokenizer.unk_token_id})")
     
-    # 데이터셋 생성
+    # 나머지 코드는 동일...
     dataset_classes = {
         "logiqa": LogiQADataset,
         "gsm8k": GSM8KDataset,
@@ -56,21 +48,16 @@ def get_tokenizer_and_dataset(dataset_name, config):
     train_dataset = dataset_class(tokenizer, config, split="train")
     
     # validation split이 없는 경우 test 사용
-    eval_dataset = None
-    for split_name in ["validation", "test"]:
+    try:
+        eval_dataset = dataset_class(tokenizer, config, split="validation")
+    except:
         try:
-            eval_dataset = dataset_class(tokenizer, config, split=split_name)
-            if split_name == "test":
-                print("⚠️ Validation split not found, using test split")
-            break
+            eval_dataset = dataset_class(tokenizer, config, split="test")
+            print("⚠️ Validation split not found, using test split")
         except:
-            continue
-    
-    if eval_dataset is None:
-        # 최후의 수단: train의 작은 부분을 validation으로 사용
-        print("⚠️ No validation/test split found, creating validation from train subset")
-        eval_dataset = dataset_class(tokenizer, config, split="train")
-        # 실제로는 train dataset의 일부만 사용하도록 수정 필요
+            # train의 일부를 validation으로 사용
+            print("⚠️ No validation/test split, creating validation from train")
+            eval_dataset = dataset_class(tokenizer, config, split="train")
     
     print(f"✅ Dataset loaded. Train: {len(train_dataset):,}, Eval: {len(eval_dataset):,}")
     

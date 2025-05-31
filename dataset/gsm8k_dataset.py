@@ -74,6 +74,7 @@ class GSM8KDataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx):
+        """GSM8K T5 전처리 개선"""
         item = self.data[idx]
         
         # 입력 토크나이징

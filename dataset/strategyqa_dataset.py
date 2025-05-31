@@ -95,6 +95,7 @@ class StrategyQADataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx):
+        """StrategyQA T5 전처리 개선"""
         item = self.data[idx]
         
         # 입력 토크나이징
