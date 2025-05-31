@@ -44,7 +44,7 @@ def test_corrected_datasets():
     print("\n🔍 Testing corrected datasets...")
     
     try:
-        from data.tokenizer_utils import get_tokenizer_and_dataset
+        from dataset.tokenizer_utils import get_tokenizer_and_dataset
         from configs.logiqa_config import get_config
         
         config = get_config("base")

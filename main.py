@@ -6,7 +6,7 @@ import warnings
 from models.connection_transformer import ConnectionTransformer
 from models.baseline_transformer import BaselineTransformer, calculate_matching_config
 from training.trainer import Trainer
-from data.tokenizer_utils import get_tokenizer_and_dataset
+from dataset.tokenizer_utils import get_tokenizer_and_dataset
 import configs.logiqa_config as logiqa_cfg
 import configs.gsm8k_config as gsm8k_cfg
 import configs.strategyqa_config as strategyqa_cfg
