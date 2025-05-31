@@ -226,9 +226,10 @@ class Trainer:
         # Loss 계산
         loss_fct = nn.CrossEntropyLoss(ignore_index=pad_token_id, label_smoothing=0.1)
         
+        # ✅ 수정: view() 대신 reshape() 사용
         # Flatten for cross entropy: [B*S, V] and [B*S]
-        flat_logits = logits_for_loss.view(-1, vocab_size)
-        flat_labels = labels.view(-1)
+        flat_logits = logits_for_loss.reshape(-1, vocab_size)
+        flat_labels = labels.reshape(-1)
         
         print(f"Debug - Flat logits shape: {flat_logits.shape}, Flat labels shape: {flat_labels.shape}")
         
