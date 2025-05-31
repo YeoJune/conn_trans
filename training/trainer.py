@@ -326,7 +326,7 @@ class Trainer:
         # 정확도 계산
         try:
             from utils.metrics import calculate_accuracy
-            accuracy = calculate_accuracy(predictions, targets) if predictions and targets else 0.0
+            accuracy = calculate_accuracy(predictions, targets, self.config.dataset_type) if predictions and targets else 0.0
         except:
             accuracy = 0.0
         
