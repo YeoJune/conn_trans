@@ -118,10 +118,10 @@ class ConnectionTransformer(nn.Module):
         
         # Output projection
         nn.init.normal_(self.output_projection.weight, std=0.02)
-    
+
     def bilinear_transform(self, H_state):
         """
-        Compute bilinear slot-to-slot influences - 최적화된 버전.
+        완전 벡터화, 수학적으로 정확한 bilinear transformation
         
         Args:
             H_state: [batch_size, num_slots, d_model]
@@ -132,20 +132,32 @@ class ConnectionTransformer(nn.Module):
         batch_size, num_slots, d_model = H_state.shape
         device = H_state.device
         
-        # 벡터화된 bilinear transformation (메모리 효율적)
-        influence = torch.zeros_like(H_state)
+        # 완전 벡터화된 구현
+        # H_state: [B, N, D]
+        # W_source: [N, N, D, r]  
+        # W_target: [N, N, r, D]
         
-        # 모든 연결을 한 번에 계산 (self-connection 제외)
-        for i in range(num_slots):
-            # Source slot i의 영향을 모든 다른 slot들에게 전파
-            source_state = H_state[:, i, :]  # [B, D]
-            
-            for j in range(num_slots):
-                if i != j:  # Skip self-connections
-                    # Bilinear transformation: source -> intermediate -> target
-                    intermediate = source_state @ self.W_source[i, j]  # [B, r]
-                    transformed = intermediate @ self.W_target[i, j]   # [B, D]
-                    influence[:, j, :] += transformed
+        # 1. 첫 번째 변환: [B, N, D] × [N, N, D, r] -> [B, N, N, r]
+        # source slot i가 모든 connection (i,j)에 미치는 중간 영향
+        
+        # H_state를 확장: [B, N, 1, D] -> broadcast to [B, N, N, D]
+        H_expanded = H_state.unsqueeze(2).expand(batch_size, num_slots, num_slots, d_model)
+        
+        # Bilinear 첫 번째 단계: [B, N, N, D] × [N, N, D, r] -> [B, N, N, r]
+        # einsum을 사용하여 정확한 행렬곱 수행
+        intermediate = torch.einsum('bijd,ijdr->bijr', H_expanded, self.W_source)
+        
+        # 2. 두 번째 변환: [B, N, N, r] × [N, N, r, D] -> [B, N, N, D]
+        output = torch.einsum('bijr,ijrd->bijd', intermediate, self.W_target)
+        
+        # 3. Self-connection 제거
+        # 대각선 마스크 생성 및 적용
+        mask = torch.eye(num_slots, device=device, dtype=torch.bool)
+        output[:, mask] = 0
+        
+        # 4. 각 target slot이 받는 모든 영향을 합산
+        # output: [B, N, N, D] -> sum over source dimension -> [B, N, D]
+        influence = output.sum(dim=1)  # sum over source slots
         
         return influence
     
