@@ -16,15 +16,27 @@ class Trainer:
         self.config = config
         self.model_type = model_type
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.tokenizer = None  # 나중에 설정됨
+        self.tokenizer = None
         
-        # 모델을 GPU로 이동
+        # 모델을 GPU로 이동하기 전에 메모리 확인
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()  # 기존 캐시 정리
+            print(f"GPU Memory before model loading: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        
         self.model.to(self.device)
+        
+        if torch.cuda.is_available():
+            print(f"GPU Memory after model loading: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        
+        # Gradient checkpointing 활성화 (메모리 절약)
+        if hasattr(self.model, 'gradient_checkpointing_enable'):
+            self.model.gradient_checkpointing_enable()
+            print("✅ Gradient checkpointing enabled")
         
         # Mixed precision scaler
         if config.fp16:
             self.scaler = torch.cuda.amp.GradScaler()
-            print("⚡ Mixed precision training enabled (GradScaler)")
+            print("⚡ Mixed precision training enabled")
         else:
             self.scaler = None
         
@@ -33,9 +45,12 @@ class Trainer:
         self.eval_accuracies = []
         self.reasoning_steps_history = []
         
-        print(f"🚀 Trainer initialized for {model_type} model on {self.device}")
+        # Gradient accumulation 설정
+        self.gradient_accumulation_steps = getattr(config, 'gradient_accumulation_steps', 1)
         
-        # 모델 파라미터 정보 출력
+        print(f"🚀 Trainer initialized for {model_type} model on {self.device}")
+        print(f"   Gradient accumulation steps: {self.gradient_accumulation_steps}")
+        
         total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f"   Total trainable parameters: {total_params:,}")
     
@@ -74,63 +89,95 @@ class Trainer:
         print(f"   Learning rate: {self.config.learning_rate}")
     
     def train_epoch(self, train_loader, epoch):
-        """한 에폭 훈련"""
+        """훈련 에폭"""
         self.model.train()
         total_loss = 0
         total_reasoning_steps = 0
         num_batches = 0
         
+        # Gradient accumulation을 위한 변수
+        accumulated_loss = 0
+        
         for batch_idx, batch in enumerate(train_loader):
-            # 데이터를 GPU로 이동
-            input_ids = batch['input_ids'].to(self.device)
-            attention_mask = batch['attention_mask'].to(self.device)
-            labels = batch['labels'].to(self.device)
-            
-            # Forward pass with mixed precision (최신 API 사용)
-            if self.config.fp16:
-                # 수정된 부분: 최신 autocast API 사용
-                with torch.amp.autocast(device_type='cuda'):
+            try:
+                # 데이터를 GPU로 이동
+                input_ids = batch['input_ids'].to(self.device, non_blocking=True)
+                attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
+                labels = batch['labels'].to(self.device, non_blocking=True)
+                
+                # Forward pass with mixed precision
+                if self.config.fp16:
+                    with torch.amp.autocast(device_type='cuda'):
+                        outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
+                        logits, reasoning_info = outputs
+                        
+                        # 손실 계산
+                        loss = self.calculate_loss(logits, labels, reasoning_info)
+                        # Gradient accumulation을 위해 손실을 나눔
+                        loss = loss / self.gradient_accumulation_steps
+                else:
                     outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
                     logits, reasoning_info = outputs
-                    
-                    # 손실 계산
                     loss = self.calculate_loss(logits, labels, reasoning_info)
-            else:
-                outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
-                logits, reasoning_info = outputs
-                loss = self.calculate_loss(logits, labels, reasoning_info)
+                    loss = loss / self.gradient_accumulation_steps
+                
+                # Backward pass
+                if self.config.fp16:
+                    self.scaler.scale(loss).backward()
+                else:
+                    loss.backward()
+                
+                accumulated_loss += loss.item()
+                
+                # Gradient step (accumulation 완료 시에만)
+                if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                    if self.config.fp16:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
+                        self.optimizer.step()
+                    
+                    self.scheduler.step()
+                    self.optimizer.zero_grad()
+                    
+                    # 메트릭 누적
+                    total_loss += accumulated_loss
+                    accumulated_loss = 0
+                
+                if isinstance(reasoning_info, dict) and 'actual_steps' in reasoning_info:
+                    total_reasoning_steps += reasoning_info['actual_steps']
+                num_batches += 1
+                
+                # 메모리 정리 (주기적)
+                if batch_idx % getattr(self.config, 'empty_cache_every', 100) == 0:
+                    torch.cuda.empty_cache()
+                
+                # 로깅
+                if batch_idx % self.config.log_every == 0:
+                    current_lr = self.scheduler.get_last_lr()[0]
+                    actual_steps = reasoning_info.get('actual_steps', 'N/A') if isinstance(reasoning_info, dict) else 'N/A'
+                    memory_used = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
+                    print(f"  Epoch {epoch} [{batch_idx:4d}/{len(train_loader)}] "
+                        f"Loss: {loss.item() * self.gradient_accumulation_steps:.4f} "
+                        f"LR: {current_lr:.2e} Steps: {actual_steps} "
+                        f"GPU: {memory_used:.1f}GB")
+                
+            except torch.cuda.OutOfMemoryError as oom_error:
+                print(f"🚨 OOM Error at batch {batch_idx}: {oom_error}")
+                print(f"   Clearing cache and skipping batch...")
+                torch.cuda.empty_cache()
+                if hasattr(self.optimizer, 'zero_grad'):
+                    self.optimizer.zero_grad()
+                continue
             
-            # Backward pass
-            self.optimizer.zero_grad()
-            
-            if self.config.fp16:
-                self.scaler.scale(loss).backward()
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
-                self.optimizer.step()
-            
-            self.scheduler.step()
-            
-            # 메트릭 누적
-            total_loss += loss.item()
-            if isinstance(reasoning_info, dict) and 'actual_steps' in reasoning_info:
-                total_reasoning_steps += reasoning_info['actual_steps']
-            num_batches += 1
-            
-            # 로깅
-            if batch_idx % self.config.log_every == 0:
-                current_lr = self.scheduler.get_last_lr()[0]
-                actual_steps = reasoning_info.get('actual_steps', 'N/A') if isinstance(reasoning_info, dict) else 'N/A'
-                print(f"  Epoch {epoch} [{batch_idx:4d}/{len(train_loader)}] "
-                    f"Loss: {loss.item():.4f} LR: {current_lr:.2e} "
-                    f"Steps: {actual_steps}")
+            except Exception as other_error:
+                print(f"⚠️ Error at batch {batch_idx}: {other_error}")
+                continue
         
-        avg_loss = total_loss / num_batches
+        avg_loss = total_loss / max(num_batches // self.gradient_accumulation_steps, 1)
         avg_reasoning_steps = total_reasoning_steps / num_batches if num_batches > 0 else 0
         
         return avg_loss, avg_reasoning_steps
@@ -201,7 +248,7 @@ class Trainer:
         return total_loss
     
     def evaluate(self, eval_loader):
-        """평가"""
+        """메모리 효율적인 평가"""
         self.model.eval()
         total_loss = 0
         predictions = []
@@ -211,62 +258,70 @@ class Trainer:
         with torch.no_grad():
             for batch_idx, batch in enumerate(eval_loader):
                 try:
-                    input_ids = batch['input_ids'].to(self.device)
-                    attention_mask = batch['attention_mask'].to(self.device)
-                    labels = batch['labels'].to(self.device)
+                    input_ids = batch['input_ids'].to(self.device, non_blocking=True)
+                    attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
+                    labels = batch['labels'].to(self.device, non_blocking=True)
                     
-                    # Forward pass
-                    outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
-                    logits, reasoning_info = outputs
+                    # Forward pass (mixed precision)
+                    if self.config.fp16:
+                        with torch.amp.autocast(device_type='cuda'):
+                            outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
+                            logits, reasoning_info = outputs
+                            loss = self.calculate_loss(logits, labels, reasoning_info)
+                    else:
+                        outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
+                        logits, reasoning_info = outputs
+                        loss = self.calculate_loss(logits, labels, reasoning_info)
                     
-                    # 손실 계산
-                    loss = self.calculate_loss(logits, labels, reasoning_info)
                     total_loss += loss.item()
                     
-                    # 예측 생성 (간단한 argmax 방식)
-                    if logits.size(1) == labels.size(1):
-                        # 같은 길이인 경우
-                        predicted_ids = torch.argmax(logits, dim=-1)
-                    else:
-                        # 길이가 다른 경우 labels 길이에 맞춤
+                    # 간단한 예측 생성 (메모리 절약)
+                    with torch.amp.autocast(device_type='cuda', enabled=False):  # autocast 비활성화
                         seq_len = min(logits.size(1), labels.size(1))
                         predicted_ids = torch.argmax(logits[:, :seq_len, :], dim=-1)
                     
-                    # 디코딩
-                    for i in range(predicted_ids.size(0)):
+                    # 배치 크기만큼 처리
+                    batch_size = predicted_ids.size(0)
+                    for i in range(min(batch_size, 4)):  # 메모리 절약을 위해 최대 4개만 디코딩
                         try:
                             pred_text = self.tokenizer.decode(predicted_ids[i], skip_special_tokens=True)
                             target_text = batch['target_text'][i] if 'target_text' in batch else "N/A"
                             
-                            predictions.append(pred_text)
-                            targets.append(target_text)
-                        except Exception as decode_error:
-                            print(f"Decode error in batch {batch_idx}, sample {i}: {decode_error}")
+                            predictions.append(pred_text.strip())
+                            targets.append(target_text.strip())
+                        except:
                             predictions.append("DECODE_ERROR")
-                            targets.append(batch.get('target_text', ["N/A"])[i] if i < len(batch.get('target_text', [])) else "N/A")
+                            targets.append("N/A")
                     
                     # 추론 스텝 기록
                     if isinstance(reasoning_info, dict) and 'actual_steps' in reasoning_info:
                         reasoning_steps_list.append(reasoning_info['actual_steps'])
+                    
+                    # 메모리 정리
+                    if batch_idx % 10 == 0:
+                        torch.cuda.empty_cache()
                         
-                except Exception as eval_error:
-                    print(f"Evaluation error in batch {batch_idx}: {eval_error}")
+                except torch.cuda.OutOfMemoryError:
+                    print(f"🚨 OOM during evaluation at batch {batch_idx}, skipping...")
+                    torch.cuda.empty_cache()
+                    continue
+                except Exception as e:
+                    print(f"⚠️ Evaluation error at batch {batch_idx}: {e}")
                     continue
         
         avg_loss = total_loss / len(eval_loader) if len(eval_loader) > 0 else 0
         
-        # 정확도 계산 (안전하게)
+        # 정확도 계산
         try:
             from utils.metrics import calculate_accuracy
-            accuracy = calculate_accuracy(predictions, targets)
-        except Exception as acc_error:
-            print(f"Accuracy calculation error: {acc_error}")
+            accuracy = calculate_accuracy(predictions, targets) if predictions and targets else 0.0
+        except:
             accuracy = 0.0
         
         avg_reasoning_steps = sum(reasoning_steps_list) / len(reasoning_steps_list) if reasoning_steps_list else 0
         
-        return avg_loss, accuracy, avg_reasoning_steps, predictions, targets
-    
+        return avg_loss, accuracy, avg_reasoning_steps, predictions[:10], targets[:10]  # 샘플만 반환
+
     def generate_predictions(self, input_ids, attention_mask, max_new_tokens=50):
         """
         예측 텍스트 생성 - T5 특화 버전
