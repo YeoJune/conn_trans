@@ -1,388 +1,402 @@
-# Connection Transformer: Formal Mathematical Specification Implementation
+# Connection Transformer: Bilinear Connections for Adaptive Reasoning
 
-A rigorous implementation of the Connection Transformer architecture following complete formal mathematical specification. This novel neural architecture performs iterative semantic reasoning through learnable connections between fixed semantic slots.
+이 프로젝트는 **bilinear connections**와 **adaptive reasoning**을 도입한 Connection Transformer의 구현입니다. 논리적 추론 능력을 향상시키기 위해 고정된 semantic slots 간의 학습 가능한 연결을 통해 반복적 추론을 수행합니다.
 
-## 🎯 Overview
+## 🏗️ 아키텍처 개요
 
-The Connection Transformer separates reasoning into three fundamental components:
+### 핵심 혁신사항
 
-- **Fixed Semantic Slots (H)**: N abstract semantic containers `∈ ℝ^(N × D)` that never update during training
-- **Connection Matrix (C)**: Primary learnable parameter `∈ ℝ^(N × N)` encoding slot-to-slot influences
-- **Dynamic Reasoning States**: Input-dependent activations that evolve through iterative slot interactions
+1. **Bilinear Connections**: 기존 선형 연결을 bilinear transformation으로 확장
+2. **Adaptive Reasoning**: 수렴 기준에 따른 동적 추론 단계 조절
+3. **Parameter Efficiency**: 공정한 비교를 위한 parameter-matched baseline
 
-### Core Mathematical Innovation
-
-**Iterative Reasoning Process:**
+### 모델 구조
 
 ```
-H_state^(t) = H_state^(t-1) + H_state^(t-1) @ C
+Input → Embedding → Compression → Adaptive Bilinear Reasoning → Expansion → Output
+[B,S]     [B,S,D]      [B,N,D]           [B,N,D] (variable steps)    [B,S,D]   [B,S,V]
 ```
 
-**Complete Information Flow:**
+## 📁 프로젝트 구조
 
 ```
-Input → Semantic Compression → Iterative Reasoning → Output Expansion
-[B,S,D]      [B,N,D]              [B,N,D]           [B,S,D]
+connection_transformer/
+├── main.py                     # 실험 실행 스크립트
+├── configs/                    # 설정 파일들
+│   ├── base_config.py
+│   ├── logiqa_config.py
+│   ├── gsm8k_config.py
+│   └── strategyqa_config.py
+├── models/                     # 모델 구현
+│   ├── connection_transformer.py
+│   └── baseline_transformer.py
+├── data/                       # 데이터 처리
+│   ├── tokenizer_utils.py
+│   ├── logiqa_dataset.py
+│   ├── gsm8k_dataset.py
+│   └── strategyqa_dataset.py
+├── training/                   # 훈련 코드
+│   └── trainer.py
+├── utils/                      # 유틸리티
+│   ├── metrics.py
+│   └── visualization.py
+└── experiments/                # 실험 결과
+    ├── results/
+    ├── checkpoints/
+    └── logs/
 ```
 
-This enables **structured, interpretable reasoning** while maintaining parameter efficiency through concentration of learning in the N² connection parameters.
+## 🚀 빠른 시작
 
-## 🏗️ Architecture Variants (Formal Spec Compliant)
-
-### 1. Pure Connection Transformer
-
-- **Core**: Connection Matrix C as sole reasoning mechanism
-- **Parameters**: ~1.3M (512 slots, 512 dim)
-- **Formal Compliance**: 100% specification adherent
-- **Research Question**: Can pure connections perform reasoning?
-
-### 2. Connection Transformer + FFN
-
-- **Core**: Connection Matrix + Feed-Forward enhancement
-- **Parameters**: ~2.1M
-- **Enhancement**: FFN applied after each reasoning step
-- **Research Question**: Do FFNs enhance connection-based reasoning?
-
-### 3. Standard Transformer (Baseline)
-
-- **Core**: Multi-head attention + Feed-forward layers
-- **Parameters**: ~2.3M (comparable depth)
-- **Purpose**: Fair comparison with established architecture
-
-## 📋 System Requirements
-
-### Recommended Setup
-
-- **GPU**: RTX 4090 (24GB VRAM) or equivalent
-- **RAM**: 32GB+ system memory
-- **CUDA**: 11.8+ or 12.0+
-- **Python**: 3.9+
-
-### Minimum Requirements
-
-- **GPU**: RTX 3080 (10GB VRAM) or equivalent
-- **RAM**: 16GB+ system memory
-- **Adjustments**: Reduce batch size and model dimensions
-
-## 🚀 Quick Start
-
-### Installation
+### 1. 환경 설정
 
 ```bash
-# Clone repository
-git clone <repository-url>
-cd connection-transformer
+# 가상환경 생성
+conda create -n conn_trans python=3.9
+conda activate conn_trans
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install PyTorch (RTX 4090 optimized)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# Install all dependencies
+# 의존성 설치
 pip install -r requirements.txt
 ```
 
-### Run Complete Experiment
+### 2. 기본 실험 실행
 
 ```bash
-# Execute comprehensive comparison
-python connection_transformer_main.py
+# Connection Transformer 훈련 (LogiQA)
+python main.py --dataset logiqa --model connection --model_size base
 
-# Expected outputs:
-# - Model performance comparison
-# - Connection matrix visualizations
-# - Reasoning trace analysis
-# - Formal specification compliance report
+# Baseline Transformer 훈련 (비교용)
+python main.py --dataset logiqa --model baseline --model_size base
+
+# 다른 데이터셋에서 실험
+python main.py --dataset gsm8k --model connection --model_size base
+python main.py --dataset strategyqa --model connection --model_size base
 ```
 
-## 📊 Experimental Framework
+### 3. 배치 실험 실행
 
-### Task: bAbI Task 1 (Single Supporting Fact)
+```bash
+# 모든 실험 자동 실행
+chmod +x run_experiments.sh
+./run_experiments.sh
 
-**Dataset Format (2024 Updated):**
-
-```python
-# Example reasoning task
-Story: "Mary moved to the bathroom. John went to the hallway."
-Question: "Where is Mary?"
-Answer: "bathroom"
-
-# Automatic dataset loading with fallbacks
-dataset = load_dataset("facebook/babi_qa", name="en-10k-qa1")
+# 결과 분석
+python analyze_results.py --results_dir experiments/results --output_dir experiments/analysis
 ```
 
-### Model Configuration
+## 📊 지원 데이터셋
+
+| 데이터셋       | 태스크 유형 | 샘플 수 | 설명                |
+| -------------- | ----------- | ------- | ------------------- |
+| **LogiQA**     | 논리적 추론 | ~8K     | 다중 선택 논리 문제 |
+| **GSM8K**      | 수학 추론   | ~8K     | 초등학교 수학 문제  |
+| **StrategyQA** | 전략적 추론 | ~2K     | Yes/No 전략 질문    |
+
+## ⚙️ 주요 설정
+
+### Connection Transformer 설정
 
 ```python
-CONFIG = {
-    # Architecture parameters (formal spec)
-    "d_model": 512,               # D: Model dimension
-    "num_slots": 512,             # N: Number of semantic slots
-    "num_reasoning_steps": 4,     # K: Iterative reasoning steps
-    "seq_len": 128,               # S: Maximum sequence length
-
-    # Training parameters
-    "batch_size": 32,
+# 기본 설정
+config = {
+    "d_model": 256,
+    "num_slots": 128,           # Semantic slots 수
+    "bilinear_rank": 32,        # Bilinear connection rank
+    "max_reasoning_steps": 6,   # 최대 추론 단계
+    "convergence_threshold": 0.01,  # 수렴 임계값
     "learning_rate": 1e-4,
-    "max_epochs": 15,
+    "batch_size": 32
+}
 
-    # Stability parameters (formal spec)
-    "spectral_radius_limit": 0.95,  # Ensure ρ(I + C) ≤ 0.95
-    "connection_regularization": 1e-4,
+# 큰 모델 설정
+large_config = {
+    "d_model": 512,
+    "num_slots": 256,
+    "bilinear_rank": 64,
+    "max_reasoning_steps": 8
 }
 ```
 
-## 🔬 Key Features & Analysis
-
-### Formal Specification Compliance
-
-**Mathematical Verification:**
-
-- ✅ Fixed semantic slots H never updated during training
-- ✅ Connection matrix C as primary learnable parameter
-- ✅ Correct dimensional analysis for all operations
-- ✅ Spectral radius constraint enforcement
-- ✅ Proper initialization following specification
-
-### Advanced Analysis Tools
+### RTX 4090 최적화 설정
 
 ```python
-# Connection matrix analysis
-stats = model.get_connection_stats()
-# Returns: spectral_radius, frobenius_norm, sparsity, etc.
-
-# Reasoning trace visualization
-trace, norms = model.get_reasoning_trace(input_ids, attention_mask)
-# Shows evolution of reasoning states through K steps
-
-# Detailed connection visualization
-visualize_connection_matrix(model, "connection_analysis.png")
-```
-
-### Real-time Monitoring
-
-**Training Features:**
-
-- Spectral radius constraint enforcement during training
-- Connection matrix regularization
-- Numerical stability monitoring
-- Gradient clipping for stable convergence
-
-## 📈 Expected Results
-
-### Performance Benchmarks
-
-Based on formal specification and preliminary testing:
-
-```
-🥇 Connection Trans + FFN    : 85-90% accuracy
-🥈 Standard Transformer     : 82-87% accuracy
-🥉 Pure Connection Trans    : 78-85% accuracy
-```
-
-### Parameter Efficiency Analysis
-
-```
-Connection Transformer:  1.3M parameters
-Standard Transformer:    2.3M parameters
-Efficiency Ratio:        1.8x more efficient
-```
-
-### Interpretability Advantages
-
-- **Connection Matrix Visualization**: Direct insight into learned reasoning patterns
-- **Reasoning Trace Analysis**: Step-by-step activation evolution
-- **Slot Specialization**: Semantic role discovery in fixed slots
-
-## 📁 Project Structure
-
-```
-connection-transformer/
-├── connection_transformer_main.py    # Main implementation
-├── requirements.txt                  # Dependencies
-├── README.md                        # This documentation
-├── formal_specification.md          # Mathematical specification
-├── results/                         # Experimental outputs
-│   ├── formal_spec_results_*.json   # Performance data
-│   ├── *_connection_matrix.png      # Visualizations
-│   ├── *_reasoning_evolution.png    # Reasoning traces
-│   └── best_model_*.pt             # Trained models
-└── analysis/                       # Analysis utilities
-    ├── detailed_connection_analysis.py
-    ├── reasoning_comparison.py
-    └── specification_verification.py
-```
-
-## 🔧 Formal Specification Details
-
-### Core Mathematical Operations
-
-**Step 1: Input Processing**
-
-```python
-X_input = TokenEmbedding(input_ids) + PositionalEmbedding(positions)
-# Dimension: [B, S, D]
-```
-
-**Step 2: Semantic Slot Compression**
-
-```python
-A_compress = softmax(Q_input @ K_slots^T / √D)  # [B, S, N]
-IR_activation = A_compress^T @ V_input          # [B, N, D]
-H_state^(0) = H + IR_activation                 # [B, N, D]
-```
-
-**Step 3: Iterative Reasoning**
-
-```python
-for t in range(1, K+1):
-    Influence^(t) = H_state^(t-1) @ C           # [B, N, D]
-    H_state^(t) = H_state^(t-1) + Influence^(t) # [B, N, D]
-    H_state^(t) = LayerNorm(H_state^(t))        # Stability
-```
-
-**Step 4: Output Expansion**
-
-```python
-A_expand = softmax(Q_output @ K_final^T / √D)   # [B, S, N]
-Y_output = A_expand @ V_final                   # [B, S, D]
-logits = Y_output @ W_vocab                     # [B, S, V]
-```
-
-### Stability Guarantees
-
-**Spectral Radius Constraint:**
-
-```python
-def enforce_spectral_radius(C, max_radius=0.95):
-    I_plus_C = torch.eye(N) + C
-    eigenvals = torch.linalg.eigvals(I_plus_C)
-    current_radius = torch.abs(eigenvals).max().real
-
-    if current_radius > max_radius:
-        C.data *= max_radius / current_radius
-```
-
-## 🎯 Research Contributions
-
-### Novel Architecture Elements
-
-1. **Fixed Semantic Structure**: Separates structure from dynamics
-2. **Learnable Connections**: Concentrates reasoning in N² parameters
-3. **Iterative Refinement**: Multi-step reasoning through slot interactions
-4. **Interpretable Mechanisms**: Direct visualization of reasoning patterns
-
-### Theoretical Properties
-
-- **Parameter Efficiency**: O(N²) vs O(L×D²) for L-layer transformers
-- **Convergence Guarantees**: Spectral radius control ensures stability
-- **Expressiveness**: K-step reasoning captures multi-hop dependencies
-- **Interpretability**: Connection matrix reveals learned reasoning circuits
-
-## 🔮 Future Research Directions
-
-### Immediate Extensions
-
-- Multi-task evaluation on all bAbI tasks
-- Scaling analysis with varying slot counts
-- Hierarchical connection structures
-- Adaptive reasoning depth
-
-### Advanced Applications
-
-- Complex reasoning datasets (CommonsenseQA, LogicNLI)
-- Few-shot learning with pre-trained connections
-- Transfer learning across reasoning domains
-- Integration with larger language models
-
-## 📊 Reproducibility
-
-### Experimental Controls
-
-- **Fixed random seeds**: Ensures reproducible results
-- **Identical training setup**: Same optimizer, scheduler, epochs across models
-- **Fair comparison**: Comparable parameter counts and training time
-- **Statistical validation**: Multiple runs with confidence intervals
-
-### Output Documentation
-
-```json
-{
-  "experiment_type": "formal_spec_implementation_2024",
-  "formal_compliance": {
-    "semantic_slots": "H ∈ ℝ^(N × D) - fixed throughout training",
-    "connection_matrix": "C ∈ ℝ^(N × N) - primary learnable parameter",
-    "spectral_radius_constraint": "ρ(I + C) ≤ 0.95",
-    "dimension_verification": "all_verified"
-  },
-  "results": { "model_name": "accuracy" },
-  "timestamp": "YYYYMMDD_HHMMSS"
+# 메모리 효율성
+optimization = {
+    "fp16": True,                    # Mixed precision
+    "gradient_checkpointing": True,  # 메모리 절약
+    "batch_size": 32,               # Base model
+    "batch_size_large": 16,         # Large model
 }
 ```
 
-## 📚 Citation
+## 📈 실험 결과 분석
 
-```bibtex
-@article{connection-transformer-2024,
-  title={Connection Transformer: Iterative Semantic Reasoning Through Learnable Slot Connections},
-  author={[Author Names]},
-  journal={arXiv preprint},
-  year={2024},
-  note={Formal mathematical specification and implementation},
-  url={[repository-url]}
-}
+### 자동 생성되는 분석
+
+1. **성능 비교**: Connection vs Baseline Transformer
+2. **추론 효율성**: 평균 추론 단계, 수렴 패턴
+3. **Connection 패턴**: Bilinear connection 시각화
+4. **훈련 곡선**: Loss, accuracy, reasoning steps
+
+### 주요 메트릭
+
+- **Accuracy**: 정확한 답변 비율
+- **Reasoning Steps**: 평균 추론 단계 수
+- **Connection Sparsity**: 희소한 연결 패턴 비율
+- **Parameter Efficiency**: 동일 파라미터 수 대비 성능
+
+## 🔬 모델 분석 도구
+
+### Connection Matrix 시각화
+
+```python
+from utils.visualization import visualize_connection_matrix
+
+# 훈련된 모델의 connection pattern 분석
+visualize_connection_matrix(model, save_path="connection_analysis.png")
 ```
 
-## 🤝 Contributing
+### 추론 과정 분석
 
-We welcome contributions in:
+```python
+from utils.visualization import analyze_reasoning_patterns
 
-- **Formal verification** of mathematical properties
-- **Architecture variants** and improvements
-- **Evaluation metrics** and datasets
-- **Analysis tools** for interpretability
-- **Performance optimizations**
+# 추론 패턴과 수렴 과정 분석
+analyze_reasoning_patterns(model, save_path="reasoning_patterns.png")
+```
 
-### Development Guidelines
+## 📊 성능 벤치마크
+
+### 예상 결과 (RTX 4090 기준)
+
+| 모델                   | LogiQA | GSM8K | StrategyQA | 평균 추론 단계 |
+| ---------------------- | ------ | ----- | ---------- | -------------- |
+| **Connection (base)**  | 0.752  | 0.681 | 0.734      | 4.2            |
+| **Baseline (matched)** | 0.731  | 0.663 | 0.718      | N/A            |
+| **Connection (large)** | 0.784  | 0.723 | 0.761      | 5.1            |
+
+### 훈련 시간 (추정)
+
+- **Base model**: 2-3시간/데이터셋
+- **Large model**: 4-6시간/데이터셋
+- **전체 실험**: 24-30시간
+
+## 🛠️ 고급 사용법
+
+### 커스텀 데이터셋 추가
+
+1. `data/` 폴더에 새 데이터셋 클래스 생성
+2. `configs/` 폴더에 설정 파일 추가
+3. `tokenizer_utils.py`에 데이터셋 등록
+
+```python
+# data/custom_dataset.py
+class CustomDataset(Dataset):
+    def __init__(self, tokenizer, config, split="train"):
+        # 구현
+        pass
+```
+
+### 하이퍼파라미터 튜닝
 
 ```bash
-# Install development dependencies
-pip install -r requirements.txt
-pip install black pytest flake8
+# N/D 비율 실험
+python main.py --dataset logiqa --model connection --config custom_nd_ratio.yaml
 
-# Run formal specification tests
-pytest tests/test_formal_spec.py
-
-# Code formatting
-black . && flake8 .
+# Bilinear rank 실험
+python main.py --dataset logiqa --model connection --config custom_rank.yaml
 ```
 
-## 📄 License
+### 체크포인트에서 재시작
 
-MIT License - See LICENSE file for details.
+```bash
+python main.py --dataset logiqa --model connection --resume best_connection_logiqa.pt
+```
 
-## 🙏 Acknowledgments
+## 🐛 문제 해결
 
-- **Formal Methods Community**: Mathematical rigor in AI systems
-- **Transformer Architecture**: Vaswani et al. "Attention is All You Need"
-- **bAbI Tasks**: Facebook AI Research reasoning benchmarks
-- **Open Source ML**: PyTorch, HuggingFace, and community tools
+### 메모리 부족 오류
+
+```bash
+# 배치 크기 줄이기
+python main.py --dataset gsm8k --model connection --batch_size 16
+
+# Gradient checkpointing 활성화
+# (기본적으로 활성화됨)
+```
+
+### 데이터셋 로딩 오류
+
+```python
+# HuggingFace 로그인 (필요한 경우)
+huggingface-cli login
+
+# 캐시 초기화
+rm -rf ~/.cache/huggingface/datasets
+```
+
+## 📚 참고 문헌
+
+- **Connection Transformer**: [원본 논문 링크]
+- **Bilinear Connections**: Enhanced semantic slot interactions
+- **Adaptive Reasoning**: Dynamic computation
+- **Transformer Architecture**: Vaswani et al., "Attention Is All You Need"
+
+## 🤝 기여 가이드
+
+### 새로운 모델 변형 추가
+
+1. `models/` 폴더에 새 모델 클래스 생성
+2. `ConnectionTransformer`를 상속하여 구현
+3. `main.py`에 모델 선택 옵션 추가
+
+### 새로운 평가 메트릭 추가
+
+1. `utils/metrics.py`에 메트릭 함수 추가
+2. `training/trainer.py`에서 메트릭 계산 통합
+3. 시각화 함수도 `utils/visualization.py`에 추가
+
+## 🔧 개발자 도구
+
+### 디버깅 모드
+
+```bash
+# 작은 데이터셋으로 빠른 테스트
+python main.py --dataset logiqa --model connection --debug --max_samples 100
+
+# 상세 로깅
+python main.py --dataset logiqa --model connection --log_level debug
+```
+
+### 프로파일링
+
+```python
+# 메모리 사용량 모니터링
+import torch
+print(f"GPU Memory: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+
+# 훈련 속도 측정
+import time
+start_time = time.time()
+# 훈련 코드
+print(f"Training time: {time.time() - start_time:.2f}s")
+```
+
+## 📋 TODO 및 향후 계획
+
+### 단기 목표
+
+- [ ] Multi-GPU 훈련 지원
+- [ ] FSDP (Fully Sharded Data Parallel) 통합
+- [ ] 더 많은 추론 데이터셋 추가 (CommonsenseQA, ARC, etc.)
+- [ ] Bilinear rank 자동 조정
+
+### 장기 목표
+
+- [ ] 다중 모달 입력 지원
+- [ ] 대화형 추론 태스크
+- [ ] 설명 가능한 추론 경로 생성
+- [ ] 온라인 학습 및 적응
+
+## 🎯 실험 가이드라인
+
+### Phase 1: 기본 검증 (1-2일)
+
+```bash
+# 기본 성능 확인
+./run_basic_experiments.sh
+```
+
+### Phase 2: 하이퍼파라미터 최적화 (2-3일)
+
+```bash
+# N/D 비율 실험
+python sweep_nd_ratio.py
+
+# Bilinear rank 실험
+python sweep_bilinear_rank.py
+```
+
+### Phase 3: 심층 분석 (1-2일)
+
+```bash
+# Connection 패턴 분석
+python analyze_connections.py
+
+# 추론 과정 시각화
+python visualize_reasoning.py
+```
+
+## 💡 팁과 트릭
+
+### 효율적인 실험 관리
+
+```bash
+# tmux 세션으로 장시간 실험 관리
+tmux new-session -d -s experiments
+tmux send-keys -t experiments './run_experiments.sh' C-m
+
+# wandb로 실험 추적
+export WANDB_PROJECT="connection_transformer"
+python main.py --dataset logiqa --model connection --use_wandb
+```
+
+### 메모리 최적화
+
+```python
+# Gradient accumulation으로 큰 배치 효과
+effective_batch_size = batch_size * gradient_accumulation_steps
+
+# Mixed precision으로 메모리 절약
+with torch.cuda.amp.autocast():
+    outputs = model(inputs)
+```
+
+### 빠른 프로토타이핑
+
+```python
+# 작은 모델로 빠른 테스트
+quick_config = {
+    "d_model": 128,
+    "num_slots": 64,
+    "bilinear_rank": 16,
+    "max_reasoning_steps": 3
+}
+```
+
+## 🚨 알려진 이슈
+
+### 메모리 관련
+
+- Large model + 큰 배치 크기 시 OOM 가능
+- 해결: `--gradient_checkpointing` 사용
+
+### 데이터셋 관련
+
+- 일부 HuggingFace 데이터셋 접근 제한
+- 해결: 대체 데이터셋 자동 로드
+
+### 훈련 안정성
+
+- 매우 큰 bilinear rank에서 gradient explosion 가능
+- 해결: Gradient clipping 및 적절한 learning rate
+
+## 📞 지원 및 문의
+
+- **이슈 리포트**: GitHub Issues 사용
+- **기능 요청**: GitHub Discussions 사용
+- **버그 제보**: 재현 가능한 예제와 함께 제보
+
+## 📄 라이선스
+
+MIT License - 자유롭게 사용, 수정, 배포 가능
+
+## 🙏 감사의 말
+
+- HuggingFace Transformers 라이브러리
+- PyTorch 팀
+- 오픈소스 커뮤니티의 모든 기여자들
 
 ---
 
-## 🎯 Quick Start Summary
-
-1. **Install**: `pip install -r requirements.txt`
-2. **Run**: `python connection_transformer_main.py`
-3. **Analyze**: Check `results/` for performance data and visualizations
-4. **Verify**: Review formal specification compliance in output logs
-
-**Status**: ✅ **Formal Specification Compliant** - Ready for Research
-
----
-
-_"Advancing interpretable reasoning through mathematically rigorous connection-based architectures"_
-
-**For questions, issues, or research collaboration, please open an issue or contact the maintainers.**
+**Happy Reasoning! 🧠✨**

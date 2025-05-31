@@ -1,6 +1,5 @@
 # models/__init__.py
-from .base_conn_trans import ConnectionTransformer
-from .conn_trans_ffn import ConnTransWithFFN
-from .standard_transformer import StandardTransformer
+from .connection_transformer import ConnectionTransformer
+from .baseline_transformer import BaselineTransformer, calculate_matching_config
 
-__all__ = ['ConnectionTransformer', 'ConnTransWithFFN', 'StandardTransformer']
+__all__ = ['ConnectionTransformer', 'BaselineTransformer', 'calculate_matching_config']

@@ -1,5 +1,15 @@
 # utils/__init__.py
-from .visualization import visualize_connection_matrix, analyze_reasoning_evolution, print_comparison_results
-# from .metrics import compute_squad_metrics # 필요시 추가
+from .metrics import calculate_accuracy, calculate_detailed_metrics, analyze_error_cases
+from .visualization import (
+    plot_training_curves, 
+    visualize_connection_matrix, 
+    analyze_reasoning_patterns,
+    compare_model_performance,
+    plot_reasoning_efficiency
+)
 
-__all__ = ['visualize_connection_matrix', 'analyze_reasoning_evolution', 'print_comparison_results']
+__all__ = [
+    'calculate_accuracy', 'calculate_detailed_metrics', 'analyze_error_cases',
+    'plot_training_curves', 'visualize_connection_matrix', 'analyze_reasoning_patterns',
+    'compare_model_performance', 'plot_reasoning_efficiency'
+]
