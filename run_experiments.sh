@@ -54,16 +54,16 @@ echo -e "${BLUE}📋 Phase 1: Small Datasets (Overfitting Prevention)${NC}"
 echo "--------------------------------------------------------"
 
 # StrategyQA (가장 작은 데이터셋 - 2,780 examples)
-run_experiment "strategyqa" "connection" "nano" "Connection Transformer (nano) on StrategyQA"
-run_experiment "strategyqa" "baseline" "nano" "Baseline Transformer (nano) on StrategyQA"
+run_experiment "strategyqa" "connection" "tiny" "Connection Transformer (tiny) on StrategyQA"
+run_experiment "strategyqa" "baseline" "tiny" "Baseline Transformer (tiny) on StrategyQA"
 
 # LogiQA (8,027 examples)
 run_experiment "logiqa" "connection" "micro" "Connection Transformer (micro) on LogiQA"
 run_experiment "logiqa" "baseline" "micro" "Baseline Transformer (micro) on LogiQA"
 
 # GSM8K (8,792 examples)
-run_experiment "gsm8k" "connection" "micro" "Connection Transformer (micro) on GSM8K"
-run_experiment "gsm8k" "baseline" "micro" "Baseline Transformer (micro) on GSM8K"
+run_experiment "gsm8k" "connection" "small" "Connection Transformer (small) on GSM8K"
+run_experiment "gsm8k" "baseline" "small" "Baseline Transformer (small) on GSM8K"
 
 echo -e "${GREEN}✅ Phase 1 completed!${NC}"
 echo ""
