@@ -4,8 +4,9 @@ import math
 class BaseConfig:
     """RTX 4090 최적화 기본 설정 클래스"""
     
+    # ✅ 기본 데이터셋 이름 추가
     dataset_name = "unknown"
-
+    
     # 🚀 RTX 4090 최적화 모델 아키텍처
     d_model = 256           # 유지 (적당한 크기)
     num_slots = 64          # 128 → 64 (4배 메모리 절약)
@@ -21,6 +22,7 @@ class BaseConfig:
     batch_size = 16         # 32 → 16 (메모리 절약)
     gradient_clip = 1.0
     reasoning_cost_weight = 0.001
+    orthogonal_weight = 0.01         # ✅ Orthogonal regularization weight 
     gradient_accumulation_steps = 2  # 실질적 batch_size = 32
     
     # 토크나이저 설정
@@ -51,20 +53,11 @@ class BaseConfig:
     
     def update(self, **kwargs):
         """설정 값들을 업데이트"""
-        # 허용된 동적 속성 목록
-        allowed_dynamic = {
-            'dataset_name', 'task_prefix', 'vocab_size',
-            'answer_max_length', 'context_max_length', 
-            'problem_max_length', 'question_max_length',
-            'baseline_config'
-        }
-        
         for k, v in kwargs.items():
-            if hasattr(self, k) or k in allowed_dynamic:
+            if hasattr(self, k):
                 setattr(self, k, v)
             else:
-                print(f"⚠️ Warning: Unknown config parameter {k}")
-        
+                print(f"Warning: Unknown config parameter {k}")
         return self
     
     def to_dict(self):

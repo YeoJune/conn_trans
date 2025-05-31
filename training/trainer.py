@@ -20,7 +20,7 @@ class Trainer:
         
         # 모델을 GPU로 이동하기 전에 메모리 확인
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()  # 기존 캐시 정리
+            torch.cuda.empty_cache()
             print(f"GPU Memory before model loading: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
         
         self.model.to(self.device)
@@ -31,7 +31,7 @@ class Trainer:
         # Gradient checkpointing 활성화 (메모리 절약)
         if hasattr(self.model, 'gradient_checkpointing_enable'):
             self.model.gradient_checkpointing_enable()
-            print("✅ Gradient checkpointing enabled")
+            print("Gradient checkpointing enabled")
         
         # Mixed precision scaler
         if config.fp16:
@@ -45,11 +45,22 @@ class Trainer:
         self.eval_accuracies = []
         self.reasoning_steps_history = []
         
+        # Orthogonal regularization 추적 변수 추가
+        self.orthogonal_losses = []
+        
         # Gradient accumulation 설정
         self.gradient_accumulation_steps = getattr(config, 'gradient_accumulation_steps', 1)
         
+        # Config에 orthogonal weight 기본값 설정
+        if not hasattr(config, 'orthogonal_weight'):
+            config.orthogonal_weight = 0.01
+        
         print(f"🚀 Trainer initialized for {model_type} model on {self.device}")
         print(f"   Gradient accumulation steps: {self.gradient_accumulation_steps}")
+        
+        # Orthogonal regularization 설정 출력
+        if model_type == "connection":
+            print(f"   Orthogonal regularization weight: {config.orthogonal_weight}")
         
         total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f"   Total trainable parameters: {total_params:,}")
@@ -89,13 +100,12 @@ class Trainer:
         print(f"   Learning rate: {self.config.learning_rate}")
     
     def train_epoch(self, train_loader, epoch):
-        """훈련 에폭"""
+        """훈련 에폭 - orthogonal regularization 로깅 추가"""
         self.model.train()
         total_loss = 0
         total_reasoning_steps = 0
+        total_orthogonal_loss = 0
         num_batches = 0
-        
-        # Gradient accumulation을 위한 변수
         accumulated_loss = 0
         
         for batch_idx, batch in enumerate(train_loader):
@@ -110,10 +120,7 @@ class Trainer:
                     with torch.amp.autocast(device_type='cuda'):
                         outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
                         logits, reasoning_info = outputs
-                        
-                        # 손실 계산
                         loss = self.calculate_loss(logits, labels, reasoning_info)
-                        # Gradient accumulation을 위해 손실을 나눔
                         loss = loss / self.gradient_accumulation_steps
                 else:
                     outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
@@ -128,6 +135,12 @@ class Trainer:
                     loss.backward()
                 
                 accumulated_loss += loss.item()
+                
+                # Orthogonal loss 개별 추적
+                if self.model_type == "connection" and hasattr(self.model, 'orthogonal_regularization_loss'):
+                    with torch.no_grad():
+                        orth_loss = self.model.orthogonal_regularization_loss()
+                        total_orthogonal_loss += orth_loss.item()
                 
                 # Gradient step (accumulation 완료 시에만)
                 if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
@@ -155,15 +168,22 @@ class Trainer:
                 if batch_idx % getattr(self.config, 'empty_cache_every', 100) == 0:
                     torch.cuda.empty_cache()
                 
-                # 로깅
                 if batch_idx % self.config.log_every == 0:
                     current_lr = self.scheduler.get_last_lr()[0]
                     actual_steps = reasoning_info.get('actual_steps', 'N/A') if isinstance(reasoning_info, dict) else 'N/A'
                     memory_used = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
-                    print(f"  Epoch {epoch} [{batch_idx:4d}/{len(train_loader)}] "
-                        f"Loss: {loss.item() * self.gradient_accumulation_steps:.4f} "
-                        f"LR: {current_lr:.2e} Steps: {actual_steps} "
-                        f"GPU: {memory_used:.1f}GB")
+                    
+                    log_msg = (f"  Epoch {epoch} [{batch_idx:4d}/{len(train_loader)}] "
+                              f"Loss: {loss.item() * self.gradient_accumulation_steps:.4f} "
+                              f"LR: {current_lr:.2e} Steps: {actual_steps} "
+                              f"GPU: {memory_used:.1f}GB")
+                    
+                    # Orthogonal loss 로깅 추가
+                    if self.model_type == "connection" and total_orthogonal_loss > 0:
+                        avg_orth_loss = total_orthogonal_loss / max(num_batches, 1)
+                        log_msg += f" Orth: {avg_orth_loss:.4f}"
+                    
+                    print(log_msg)
                 
             except torch.cuda.OutOfMemoryError as oom_error:
                 print(f"🚨 OOM Error at batch {batch_idx}: {oom_error}")
@@ -179,8 +199,9 @@ class Trainer:
         
         avg_loss = total_loss / max(num_batches // self.gradient_accumulation_steps, 1)
         avg_reasoning_steps = total_reasoning_steps / num_batches if num_batches > 0 else 0
+        avg_orthogonal_loss = total_orthogonal_loss / num_batches if num_batches > 0 else 0
         
-        return avg_loss, avg_reasoning_steps
+        return avg_loss, avg_reasoning_steps, avg_orthogonal_loss
     
     def calculate_loss(self, logits, labels, reasoning_info):
         """
@@ -191,32 +212,20 @@ class Trainer:
         if pad_token_id is None:
             pad_token_id = 0
         
-        # T5는 sequence-to-sequence 모델이므로 input과 target이 다를 수 있음
-        # logits: [B, S_in, V], labels: [B, S_out]
-        
         batch_size = logits.size(0)
         seq_len_in = logits.size(1)
         vocab_size = logits.size(2)
-        
         seq_len_out = labels.size(1)
-        
-        # T5 모델의 경우 labels가 decoder input과 다를 수 있음
-        # 여기서는 labels를 target sequence로 처리
         
         # Cross entropy 계산을 위해 올바른 형태로 변환
         if seq_len_in != seq_len_out:
-            # Input과 output 길이가 다른 경우 - T5의 일반적인 상황
-            # labels의 길이에 맞춰 logits을 조정하거나, 적절한 처리 필요
-            
             if seq_len_out < seq_len_in:
-                # Target이 더 짧은 경우 (일반적) - 마지막 부분만 사용
                 logits_for_loss = logits[:, :seq_len_out, :]
             else:
-                # Target이 더 긴 경우 - padding 적용
                 pad_length = seq_len_out - seq_len_in
                 padding = torch.full((batch_size, pad_length, vocab_size), 
                                 float('-inf'), device=logits.device)
-                padding[:, :, pad_token_id] = 0  # pad token에 대해서는 0
+                padding[:, :, pad_token_id] = 0
                 logits_for_loss = torch.cat([logits, padding], dim=1)
         else:
             logits_for_loss = logits
@@ -224,23 +233,29 @@ class Trainer:
         # Loss 계산
         loss_fct = nn.CrossEntropyLoss(ignore_index=pad_token_id, label_smoothing=0.1)
         
-        # ✅ 수정: view() 대신 reshape() 사용
-        # Flatten for cross entropy: [B*S, V] and [B*S]
         flat_logits = logits_for_loss.reshape(-1, vocab_size)
         flat_labels = labels.reshape(-1)
         
         lm_loss = loss_fct(flat_logits, flat_labels)
         
-        # Connection Transformer의 경우 추론 비용 추가
-        if self.model_type == "connection" and hasattr(self.model, 'reasoning_cost_loss'):
-            reasoning_cost = self.model.reasoning_cost_loss(
-                reasoning_info.get('actual_steps', 4),
-                target_steps=4,
-                weight=self.config.reasoning_cost_weight
-            )
-            total_loss = lm_loss + reasoning_cost
-        else:
-            total_loss = lm_loss
+        # Connection Transformer 정규화 추가
+        total_loss = lm_loss
+        
+        if self.model_type == "connection":
+            # 1. Reasoning cost loss
+            if hasattr(self.model, 'reasoning_cost_loss'):
+                reasoning_cost = self.model.reasoning_cost_loss(
+                    reasoning_info.get('actual_steps', 4),
+                    target_steps=4,
+                    weight=self.config.reasoning_cost_weight
+                )
+                total_loss += reasoning_cost
+            
+            # 2. Orthogonal regularization loss
+            if hasattr(self.model, 'orthogonal_regularization_loss'):
+                orthogonal_loss = self.model.orthogonal_regularization_loss()
+                orthogonal_weight = getattr(self.config, 'orthogonal_weight', 0.01)
+                total_loss += orthogonal_weight * orthogonal_loss
         
         return total_loss
     
@@ -422,8 +437,12 @@ class Trainer:
         for epoch in range(start_epoch, self.config.num_epochs):
             epoch_start_time = time.time()
             
-            # 훈련
-            train_loss, avg_reasoning_steps = self.train_epoch(train_loader, epoch)
+            # 훈련 - orthogonal loss 포함
+            if self.model_type == "connection":
+                train_loss, avg_reasoning_steps, avg_orthogonal_loss = self.train_epoch(train_loader, epoch)
+            else:
+                train_loss, avg_reasoning_steps = self.train_epoch(train_loader, epoch)
+                avg_orthogonal_loss = 0.0
             
             # 평가
             eval_loss, accuracy, eval_reasoning_steps, predictions, targets = self.evaluate(eval_loader)
@@ -433,6 +452,10 @@ class Trainer:
             self.eval_accuracies.append(accuracy)
             self.reasoning_steps_history.append(avg_reasoning_steps)
             
+            # Orthogonal loss 기록
+            if self.model_type == "connection":
+                self.orthogonal_losses.append(avg_orthogonal_loss)
+            
             epoch_time = time.time() - epoch_start_time
             
             print(f"\nEpoch {epoch + 1}/{self.config.num_epochs} ({epoch_time:.1f}s)")
@@ -441,6 +464,15 @@ class Trainer:
             print(f"  Accuracy:   {accuracy:.4f}")
             if self.model_type == "connection":
                 print(f"  Avg Reasoning Steps: {avg_reasoning_steps:.2f}")
+                print(f"  Orthogonal Loss: {avg_orthogonal_loss:.4f}")
+                
+                # Connection 품질 분석 출력
+                if hasattr(self.model, 'get_connection_analysis'):
+                    analysis = self.model.get_connection_analysis()
+                    print(f"  Connection Quality:")
+                    print(f"    Max strength: {analysis['max_connection']:.4f}")
+                    print(f"    Mean strength: {analysis['mean_connection']:.4f}")
+                    print(f"    Orthogonality quality: {analysis['orthogonality_quality']:.4f}")
             
             # 최고 성능 모델 저장
             if accuracy > best_accuracy:
@@ -483,7 +515,8 @@ class Trainer:
             torch.save(checkpoint, f'checkpoint_{self.model_type}_{self.config.dataset_name}_epoch_{epoch}.pt')
     
     def save_training_results(self, best_accuracy, sample_predictions, sample_targets):
-        """훈련 결과 저장"""
+        """훈련 결과 저장 - orthogonal loss 포함"""
+        
         results = {
             'model_type': self.model_type,
             'dataset': self.config.dataset_name,
@@ -497,9 +530,24 @@ class Trainer:
             'timestamp': time.strftime("%Y%m%d_%H%M%S")
         }
         
-        filename = f'results_{self.model_type}_{self.config.dataset_name}_{results["timestamp"]}.json'
+        # Connection Transformer 전용 메트릭 추가
+        if self.model_type == "connection":
+            results['orthogonal_losses'] = getattr(self, 'orthogonal_losses', [])
+            
+            # 최종 connection 분석
+            if hasattr(self.model, 'get_connection_analysis'):
+                final_analysis = self.model.get_connection_analysis()
+                results['final_connection_analysis'] = {
+                    'max_connection': final_analysis['max_connection'],
+                    'mean_connection': final_analysis['mean_connection'],
+                    'sparsity_ratio': final_analysis['sparsity_ratio'],
+                    'orthogonality_quality': final_analysis['orthogonality_quality'],
+                    'orthogonality_error': final_analysis['orthogonality_error']
+                }
+        
+        filename = f'results_{self.model_type}_{dataset_name}_{results["timestamp"]}.json'
         with open(filename, 'w') as f:
-            json.dump(results, f, indent=2, default=str)  # default=str for non-serializable objects
+            json.dump(results, f, indent=2, default=str)
         
         print(f"📊 Results saved to {filename}")
         
@@ -509,12 +557,12 @@ class Trainer:
                 self.train_losses, 
                 self.eval_accuracies, 
                 self.reasoning_steps_history,
-                save_path=f'training_curves_{self.model_type}_{self.config.dataset_name}.png'
+                save_path=f'training_curves_{self.model_type}_{dataset_name}.png'
             )
         
         # Connection Transformer 분석
         if self.model_type == "connection" and hasattr(self.model, 'get_connection_analysis'):
             analyze_reasoning_patterns(
                 self.model,
-                save_path=f'reasoning_analysis_{self.config.dataset_name}.png'
+                save_path=f'reasoning_analysis_{dataset_name}.png'
             )

@@ -46,4 +46,3 @@ def get_config(model_size="base"):
     
     config.print_model_info()
     return config
-
