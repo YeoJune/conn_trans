@@ -2,48 +2,50 @@
 import math
 
 class BaseConfig:
-    """기본 설정 클래스 - 모든 실험의 베이스"""
+    """RTX 4090 최적화 기본 설정 클래스"""
     
-    # 모델 아키텍처
-    d_model = 256
-    num_slots = 128
-    bilinear_rank = 32
-    max_reasoning_steps = 6
+    # 🚀 RTX 4090 최적화 모델 아키텍처
+    d_model = 256           # 유지 (적당한 크기)
+    num_slots = 64          # 128 → 64 (4배 메모리 절약)
+    bilinear_rank = 16      # 32 → 16 (4배 메모리 절약)
+    max_reasoning_steps = 4 # 6 → 4 (빠른 수렴)
     convergence_threshold = 0.01
     
-    # 훈련 설정
+    # 🎯 훈련 설정 최적화
     learning_rate = 1e-4
     weight_decay = 0.01
-    num_epochs = 20
+    num_epochs = 12         # 20 → 12 (빠른 실험)
     warmup_ratio = 0.1
-    batch_size = 32
+    batch_size = 16         # 32 → 16 (메모리 절약)
     gradient_clip = 1.0
     reasoning_cost_weight = 0.001
+    gradient_accumulation_steps = 2  # 실질적 batch_size = 32
     
-    # 토크나이저 설정 (T5 고정)
-    tokenizer_name = "t5-base"  # T5 전용
-    max_seq_len = 512
+    # 토크나이저 설정
+    tokenizer_name = "t5-base"
+    max_seq_len = 256       # 512 → 256 (메모리 절약)
     
     # T5 특화 설정
-    decoder_start_token_id = 0  # T5의 pad_token_id
+    decoder_start_token_id = 0
     
-    # 데이터셋별 task prefix (T5의 핵심 특징)
+    # 데이터셋별 task prefix
     task_prefixes = {
         "logiqa": "reason",
         "gsm8k": "solve", 
         "strategyqa": "strategy"
     }
     
-    # 하드웨어 설정
-    fp16 = True
-    gradient_checkpointing = True
-    num_workers = 4
+    # 🔧 RTX 4090 최적화 하드웨어 설정
+    fp16 = True             # Mixed precision 필수
+    gradient_checkpointing = True  # 메모리 절약
+    num_workers = 8         # 4090의 높은 처리 속도 활용
     pin_memory = True
+    empty_cache_every = 50  # 자주 캐시 정리
     
     # 로깅 설정
-    save_every = 1000
-    eval_every = 500
-    log_every = 100
+    save_every = 500
+    eval_every = 200        # 더 자주 평가
+    log_every = 20          # 더 자주 로깅
     
     def update(self, **kwargs):
         """설정 값들을 업데이트"""
@@ -63,72 +65,48 @@ class BaseConfig:
         """데이터셋에 따른 task prefix 반환"""
         return self.task_prefixes.get(dataset_name, "answer")
     
-    def calculate_baseline_config(self):
-        """매칭되는 baseline transformer 설정 계산"""
-        # Connection Transformer 파라미터 계산
+    def get_estimated_params(self):
+        """예상 파라미터 수 계산"""
         N = self.num_slots
         D = self.d_model
         r = self.bilinear_rank
-        V = getattr(self, 'vocab_size', 32000)
+        V = 32128  # T5-base vocab size
         S = self.max_seq_len
         
-        # Connection Transformer 파라미터 수
-        bilinear_params = 2 * N * N * D * r
-        cross_attn_params = 6 * D * D
-        embedding_params = (V + S) * D
-        output_params = D * V
-        layer_norm_params = self.max_reasoning_steps * 2 * D  # LayerNorm has weight + bias
+        # Connection Transformer 파라미터
+        bilinear_params = 2 * N * N * D * r  # W_source + W_target
+        cross_attn_params = 6 * D * D        # 6개 projection matrices
+        embedding_params = (V + S) * D       # token + pos embeddings
+        output_params = D * V                # output projection
+        layer_norm_params = self.max_reasoning_steps * 2 * D
         
-        conn_total = bilinear_params + cross_attn_params + embedding_params + output_params + layer_norm_params
+        total = bilinear_params + cross_attn_params + embedding_params + output_params + layer_norm_params
         
-        print(f"\nConnection Transformer parameters:")
-        print(f"  Bilinear: {bilinear_params:,}")
-        print(f"  Cross-attention: {cross_attn_params:,}")  
-        print(f"  Embeddings: {embedding_params:,}")
-        print(f"  Output: {output_params:,}")
-        print(f"  LayerNorms: {layer_norm_params:,}")
-        print(f"  Total: {conn_total:,}")
+        return {
+            'bilinear': bilinear_params,
+            'cross_attention': cross_attn_params,
+            'embeddings': embedding_params,
+            'output': output_params,
+            'layer_norms': layer_norm_params,
+            'total': total
+        }
+    
+    def print_model_info(self):
+        """모델 정보 출력"""
+        params = self.get_estimated_params()
+        print(f"\n📊 Model Configuration:")
+        print(f"   d_model: {self.d_model}")
+        print(f"   num_slots: {self.num_slots}")
+        print(f"   bilinear_rank: {self.bilinear_rank}")
+        print(f"   max_reasoning_steps: {self.max_reasoning_steps}")
+        print(f"\n🔢 Estimated Parameters:")
+        print(f"   Bilinear connections: {params['bilinear']:,}")
+        print(f"   Cross-attention: {params['cross_attention']:,}")
+        print(f"   Embeddings: {params['embeddings']:,}")
+        print(f"   Output projection: {params['output']:,}")
+        print(f"   Layer norms: {params['layer_norms']:,}")
+        print(f"   Total: {params['total']:,} ({params['total']/1e6:.1f}M)")
         
-        # Baseline transformer - 공유 파라미터
-        baseline_shared = embedding_params + output_params + 2 * D  # output LayerNorm
-        available_for_layers = conn_total - baseline_shared
-        
-        # 최적 layer 수와 FFN 배수 찾기
-        best_config = None
-        best_diff = float('inf')
-        
-        for ffn_mult in [2, 3, 4, 6, 8]:
-            ffn_dim = D * ffn_mult
-            
-            # Attention parameters
-            attn_params = 4 * D * D  # q, k, v, out projections
-            
-            # FFN parameters  
-            ffn_params = D * ffn_dim + ffn_dim * D + ffn_dim + D  # linear1 + linear2 + biases
-            
-            # LayerNorm parameters
-            ln_params = 4 * D  # 2 LayerNorms * (weight + bias)
-            
-            params_per_layer = attn_params + ffn_params + ln_params
-            
-            num_layers = max(1, available_for_layers // params_per_layer)
-            actual_layer_params = num_layers * params_per_layer
-            total_baseline = baseline_shared + actual_layer_params
-            
-            diff = abs(total_baseline - conn_total)
-            if diff < best_diff:
-                best_diff = diff
-                best_config = {
-                    'num_layers': int(num_layers),
-                    'ffn_multiplier': ffn_mult,
-                    'total_params': total_baseline,
-                    'param_diff': diff
-                }
-        
-        print(f"\nMatched Baseline Transformer:")
-        print(f"  Layers: {best_config['num_layers']}")
-        print(f"  FFN multiplier: {best_config['ffn_multiplier']}")
-        print(f"  Total params: {best_config['total_params']:,}")
-        print(f"  Difference: {best_config['param_diff']:,} ({best_config['param_diff']/conn_total*100:.1f}%)")
-        
-        return best_config
+        # 메모리 예상
+        memory_gb = params['total'] * 4 / 1e9 * 3  # FP32 기준 x3 (grads + optimizer)
+        print(f"\n💾 Estimated GPU Memory: ~{memory_gb:.1f}GB")
