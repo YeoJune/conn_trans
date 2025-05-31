@@ -510,10 +510,10 @@ class Trainer:
         }
         
         if is_best:
-            torch.save(checkpoint, f'best_{self.model_type}_{self.config.dataset_name}.pt')
+            torch.save(checkpoint, os.path.join(self.config.output_dir, f'best_{self.model_type}_{dataset_name}.pt'))
         else:
-            torch.save(checkpoint, f'checkpoint_{self.model_type}_{self.config.dataset_name}_epoch_{epoch}.pt')
-    
+            torch.save(checkpoint, os.path.join(self.config.output_dir, f'checkpoint_{self.model_type}_{dataset_name}_epoch_{epoch}.pt'))
+
     def save_training_results(self, best_accuracy, sample_predictions, sample_targets):
         """훈련 결과 저장 - orthogonal loss 포함"""
         
@@ -545,7 +545,7 @@ class Trainer:
                     'orthogonality_error': final_analysis['orthogonality_error']
                 }
         
-        filename = f'results_{self.model_type}_{self.config.dataset_name}_{results["timestamp"]}.json'
+        filename = os.path.join(self.config.output_dir, f'results_{self.model_type}_{self.config.dataset_name}_{results["timestamp"]}.json')
         with open(filename, 'w') as f:
             json.dump(results, f, indent=2, default=str)
         

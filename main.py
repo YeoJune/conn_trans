@@ -91,6 +91,7 @@ def main():
         print(f"   Continuing anyway...")
     
     config = config_map[args.dataset].get_config(model_size=args.model_size)
+    config.output_dir = args.output_dir
     
     print(f"\n📋 Configuration for {args.dataset} ({args.model_size}):")
     print(f"   Model: {args.model}")
