@@ -200,8 +200,6 @@ class Trainer:
         
         seq_len_out = labels.size(1)
         
-        print(f"Debug - Logits shape: {logits.shape}, Labels shape: {labels.shape}")
-        
         # T5 모델의 경우 labels가 decoder input과 다를 수 있음
         # 여기서는 labels를 target sequence로 처리
         
@@ -230,8 +228,6 @@ class Trainer:
         # Flatten for cross entropy: [B*S, V] and [B*S]
         flat_logits = logits_for_loss.reshape(-1, vocab_size)
         flat_labels = labels.reshape(-1)
-        
-        print(f"Debug - Flat logits shape: {flat_logits.shape}, Flat labels shape: {flat_labels.shape}")
         
         lm_loss = loss_fct(flat_logits, flat_labels)
         
