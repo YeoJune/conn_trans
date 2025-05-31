@@ -135,7 +135,7 @@ class Trainer:
         pad_token_id = getattr(self.tokenizer, 'pad_token_id', 0)
         if pad_token_id is None:
             pad_token_id = 0
-        
+
         # T5 스타일 손실 계산 (decoder-only가 아닌 seq2seq)
         # logits: [B, S, V], labels: [B, S]
         
@@ -143,8 +143,8 @@ class Trainer:
         
         # Flatten for cross entropy
         shift_logits = logits.view(-1, logits.size(-1))  # [B*S, V]
-        shift_labels = labels.view(-1)  # [B*S]
-        
+        shift_labels = labels.view(-1).to(logits.device)  # [B*S] → logits와 동일 디바이스로 이동
+
         lm_loss = loss_fct(shift_logits, shift_labels)
         
         # Connection Transformer의 경우 추론 비용 추가
@@ -159,6 +159,7 @@ class Trainer:
             total_loss = lm_loss
         
         return total_loss
+
     
     def evaluate(self, eval_loader):
         """평가"""
