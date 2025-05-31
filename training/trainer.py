@@ -545,7 +545,7 @@ class Trainer:
                     'orthogonality_error': final_analysis['orthogonality_error']
                 }
         
-        filename = f'results_{self.model_type}_{dataset_name}_{results["timestamp"]}.json'
+        filename = f'results_{self.model_type}_{self.config.dataset_name}_{results["timestamp"]}.json'
         with open(filename, 'w') as f:
             json.dump(results, f, indent=2, default=str)
         
@@ -557,12 +557,12 @@ class Trainer:
                 self.train_losses, 
                 self.eval_accuracies, 
                 self.reasoning_steps_history,
-                save_path=f'training_curves_{self.model_type}_{dataset_name}.png'
+                save_path=f'training_curves_{self.model_type}_{self.config.dataset_name}.png'
             )
         
         # Connection Transformer 분석
         if self.model_type == "connection" and hasattr(self.model, 'get_connection_analysis'):
             analyze_reasoning_patterns(
                 self.model,
-                save_path=f'reasoning_analysis_{dataset_name}.png'
+                save_path=f'reasoning_analysis_{self.config.dataset_name}.png'
             )
