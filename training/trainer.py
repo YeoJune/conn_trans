@@ -438,11 +438,7 @@ class Trainer:
             epoch_start_time = time.time()
             
             # 훈련 - orthogonal loss 포함
-            if self.model_type == "connection":
-                train_loss, avg_reasoning_steps, avg_orthogonal_loss = self.train_epoch(train_loader, epoch)
-            else:
-                train_loss, avg_reasoning_steps = self.train_epoch(train_loader, epoch)
-                avg_orthogonal_loss = 0.0
+            train_loss, avg_reasoning_steps, avg_orthogonal_loss = self.train_epoch(train_loader, epoch)
             
             # 평가
             eval_loss, accuracy, eval_reasoning_steps, predictions, targets = self.evaluate(eval_loader)
@@ -510,9 +506,9 @@ class Trainer:
         }
         
         if is_best:
-            torch.save(checkpoint, os.path.join(self.config.output_dir, f'best_{self.model_type}_{dataset_name}.pt'))
+            torch.save(checkpoint, os.path.join(self.config.output_dir, f'best_{self.model_type}_{self.config.dataset_name}.pt'))
         else:
-            torch.save(checkpoint, os.path.join(self.config.output_dir, f'checkpoint_{self.model_type}_{dataset_name}_epoch_{epoch}.pt'))
+            torch.save(checkpoint, os.path.join(self.config.output_dir, f'checkpoint_{self.model_type}_{self.config.dataset_name}_epoch_{epoch}.pt'))
 
     def save_training_results(self, best_accuracy, sample_predictions, sample_targets):
         """훈련 결과 저장 - orthogonal loss 포함"""
@@ -557,12 +553,12 @@ class Trainer:
                 self.train_losses, 
                 self.eval_accuracies, 
                 self.reasoning_steps_history,
-                save_path=f'training_curves_{self.model_type}_{self.config.dataset_name}.png'
+                save_path=os.path.join(self.config.output_dir, f'training_curves_{self.model_type}_{self.config.dataset_name}.png')
             )
         
         # Connection Transformer 분석
         if self.model_type == "connection" and hasattr(self.model, 'get_connection_analysis'):
             analyze_reasoning_patterns(
                 self.model,
-                save_path=f'reasoning_analysis_{self.config.dataset_name}.png'
+                save_path=os.path.join(self.config.output_dir, f'reasoning_analysis_{self.config.dataset_name}.png')
             )
