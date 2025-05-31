@@ -1,4 +1,4 @@
-# models/connection_transformer.py - 수정된 버전
+# models/connection_transformer.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -66,8 +66,16 @@ class ConnectionTransformer(nn.Module):
         total_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         print(f"🔹 Connection Transformer: {total_params:,} parameters")
         print(f"   - Bilinear connections: {self.W_source.numel() + self.W_target.numel():,}")
-        print(f"   - Cross-attention: {sum(p.numel() for p in [self.W_q_input, self.W_k_slots, self.W_v_input, self.W_q_output, self.W_k_final, self.W_v_final]):,}")
         
+        cross_attention_params = sum(
+            p.numel() for layer in [
+                self.W_q_input, self.W_k_slots, self.W_v_input,
+                self.W_q_output, self.W_k_final, self.W_v_final
+            ] for p in layer.parameters()
+        )
+
+        print(f"   - Cross-attention: {cross_attention_params:,}")
+
     def _create_orthogonal_slots(self, num_slots, d_model):
         """Create orthogonal semantic slots for independent semantic spaces."""
         if num_slots <= d_model:
