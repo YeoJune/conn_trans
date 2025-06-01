@@ -67,17 +67,20 @@ def main():
     print(f"   d_model: {config.d_model}, batch_size: {config.batch_size}")
     print(f"   learning_rate: {config.learning_rate}, epochs: {config.num_epochs}")
     
-    # 데이터 로드
+    # ✅ 데이터 로드 (이때 config에 vocab_size가 설정됨)
     print(f"\n🔄 Loading data...")
     tokenizer, train_dataset, eval_dataset = get_tokenizer_and_dataset(args.dataset, config)
+    
+    # ✅ 이제 config.src_vocab_size, config.tgt_vocab_size가 설정되어 있음
+    print(f"✅ Vocab size set: {config.src_vocab_size}")
     
     # 모델 생성
     print(f"\n🏗️ Building {args.model} model...")
     
     if args.model == "connection":
         model = ConnectionTransformer(
-            src_vocab_size=tokenizer.vocab_size,
-            tgt_vocab_size=tokenizer.vocab_size,
+            src_vocab_size=config.src_vocab_size,  # ✅ 이제 올바른 값 사용
+            tgt_vocab_size=config.tgt_vocab_size,  # ✅ 이제 올바른 값 사용
             d_model=config.d_model,
             num_slots=config.num_slots,
             bilinear_rank=config.bilinear_rank,
@@ -85,27 +88,27 @@ def main():
             convergence_threshold=config.convergence_threshold,
             max_seq_len=config.max_seq_len,
             dropout=getattr(config, 'dropout', 0.1),
-            src_pad_token_id=tokenizer.pad_token_id,
-            tgt_pad_token_id=tokenizer.pad_token_id,
+            src_pad_token_id=config.src_pad_token_id,  # ✅ 올바른 값
+            tgt_pad_token_id=config.tgt_pad_token_id,  # ✅ 올바른 값
             num_decoder_layers=getattr(config, 'num_decoder_layers', 3),
             num_heads=getattr(config, 'num_heads', 4)
         )
         
     else:  # baseline
         print("\n🔍 Calculating matching baseline...")
-        baseline_config = calculate_matching_config_enc_dec(config)
+        baseline_config = config.get_compatible_baseline_config()
         
         model = BaselineTransformer(
-            src_vocab_size=tokenizer.vocab_size,
-            tgt_vocab_size=tokenizer.vocab_size,
+            src_vocab_size=config.src_vocab_size,  # ✅ 올바른 값
+            tgt_vocab_size=config.tgt_vocab_size,  # ✅ 올바른 값
             d_model=config.d_model,
             num_encoder_layers=baseline_config['num_encoder_layers'],
             num_decoder_layers=baseline_config['num_decoder_layers'],
             ffn_multiplier=baseline_config['ffn_multiplier'],
             max_seq_len=config.max_seq_len,
             dropout=getattr(config, 'dropout', 0.1),
-            src_pad_token_id=tokenizer.pad_token_id,
-            tgt_pad_token_id=tokenizer.pad_token_id
+            src_pad_token_id=config.src_pad_token_id,  # ✅ 올바른 값
+            tgt_pad_token_id=config.tgt_pad_token_id   # ✅ 올바른 값
         )
         
         config.baseline_config = baseline_config
