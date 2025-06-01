@@ -487,32 +487,55 @@ class Trainer:
                     results['final_connection_analysis']['orthogonality_quality'] = final_analysis['orthogonality_quality']
                     results['final_connection_analysis']['orthogonality_error'] = final_analysis['orthogonality_error']
         
+        # 결과 파일 저장
         filename = os.path.join(self.config.output_dir, f'results_{self.model_type}_{self.config.dataset_name}_{results["timestamp"]}.json')
         with open(filename, 'w') as f:
             json.dump(results, f, indent=2, default=str)
         
         print(f"📊 T5-optimized results saved to {filename}")
         
-        # 시각화 (선택적)
+        # 🎨 간소화된 시각화 생성
         if len(self.train_losses) > 1:
             try:
-                from utils.visualization import plot_training_curves
+                from utils.visualization import plot_training_curves, plot_accuracy_breakdown
+                
+                # 훈련 곡선
                 plot_training_curves(
                     self.train_losses, 
                     self.eval_accuracies, 
-                    self.reasoning_steps_history,
+                    self.reasoning_steps_history if self.model_type == "connection" else None,
                     save_path=os.path.join(self.config.output_dir, f'training_curves_{self.model_type}_{self.config.dataset_name}.png')
                 )
-            except ImportError:
-                print("⚠️ Visualization not available")
+                
+                # 정확도 분석
+                if sample_predictions and sample_targets:
+                    plot_accuracy_breakdown(
+                        sample_predictions,
+                        sample_targets,
+                        self.config.dataset_name,
+                        save_path=os.path.join(self.config.output_dir, f'accuracy_breakdown_{self.model_type}_{self.config.dataset_name}.png')
+                    )
+                
+            except ImportError as e:
+                print(f"⚠️ Visualization not available: {e}")
         
-        # Connection Transformer 분석
+        # Connection Transformer 전용 분석
         if self.model_type == "connection" and hasattr(self.model, 'get_connection_analysis'):
             try:
-                from utils.visualization import analyze_reasoning_patterns
+                from utils.visualization import visualize_connection_matrix, analyze_reasoning_patterns
+                
+                # Connection matrix 시각화
+                visualize_connection_matrix(
+                    self.model,
+                    save_path=os.path.join(self.config.output_dir, f'connection_matrix_{self.config.dataset_name}.png'),
+                    title_suffix=f" ({self.config.dataset_name})"
+                )
+                
+                # 추론 패턴 분석
                 analyze_reasoning_patterns(
                     self.model,
-                    save_path=os.path.join(self.config.output_dir, f'reasoning_analysis_{self.config.dataset_name}.png')
+                    save_path=os.path.join(self.config.output_dir, f'reasoning_patterns_{self.config.dataset_name}.png')
                 )
-            except ImportError:
-                print("⚠️ Connection analysis visualization not available")
+                
+            except ImportError as e:
+                print(f"⚠️ Connection analysis visualization not available: {e}")

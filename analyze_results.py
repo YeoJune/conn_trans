@@ -101,67 +101,42 @@ def create_performance_plots(results, output_dir):
         if len(dataset_results) >= 2:  # 비교할 모델이 2개 이상
             # 성능 비교 플롯
             model_accuracies = {
-                data.get('model_type', key): data.get('best_accuracy', 0.0)
+                data.get('model_type', key): {'best_accuracy': data.get('best_accuracy', 0.0)}
                 for key, data in dataset_results.items()
             }
             
-            compare_model_performance(
-                {k: {'best_accuracy': v} for k, v in model_accuracies.items()},
-                save_path=os.path.join(output_dir, f'performance_comparison_{dataset}.png')
-            )
+            try:
+                from utils.visualization import compare_model_performance
+                compare_model_performance(
+                    model_accuracies,
+                    save_path=os.path.join(output_dir, f'performance_comparison_{dataset}.png')
+                )
+            except ImportError:
+                print(f"⚠️ Visualization not available for {dataset}")
 
 def create_reasoning_analysis_plots(reasoning_data, output_dir):
     """추론 분석 플롯 생성"""
     if not reasoning_data:
         return
     
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-    
-    # 1. 평균 추론 스텝 비교
-    datasets = list(reasoning_data.keys())
-    mean_steps = [reasoning_data[d]['mean_steps'] for d in datasets]
-    
-    axes[0, 0].bar(datasets, mean_steps, alpha=0.7, color='skyblue')
-    axes[0, 0].set_title('Average Reasoning Steps by Dataset')
-    axes[0, 0].set_ylabel('Steps')
-    axes[0, 0].grid(True, alpha=0.3)
-    
-    # 2. 최종 추론 스텝
-    final_steps = [reasoning_data[d]['final_steps'] for d in datasets]
-    axes[0, 1].bar(datasets, final_steps, alpha=0.7, color='lightcoral')
-    axes[0, 1].set_title('Final Reasoning Steps by Dataset')
-    axes[0, 1].set_ylabel('Steps')
-    axes[0, 1].grid(True, alpha=0.3)
-    
-    # 3. 추론 수렴 트렌드
-    for i, dataset in enumerate(datasets):
-        trend = reasoning_data[dataset]['convergence_trend']
-        axes[1, 0].plot(trend, label=dataset, alpha=0.7)
-    
-    axes[1, 0].set_title('Reasoning Convergence Trends')
-    axes[1, 0].set_xlabel('Epoch')
-    axes[1, 0].set_ylabel('Steps')
-    axes[1, 0].legend()
-    axes[1, 0].grid(True, alpha=0.3)
-    
-    # 4. 효율성 지표
-    efficiency_scores = []
-    for dataset in datasets:
-        # 효율성 = 정확도 / 평균 추론 스텝
-        # 더 정확한 지표를 위해서는 정확도 정보도 필요
-        eff_score = 1.0 / reasoning_data[dataset]['mean_steps']  # 단순 역수
-        efficiency_scores.append(eff_score)
-    
-    axes[1, 1].bar(datasets, efficiency_scores, alpha=0.7, color='lightgreen')
-    axes[1, 1].set_title('Reasoning Efficiency (1/avg_steps)')
-    axes[1, 1].set_ylabel('Efficiency')
-    axes[1, 1].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'reasoning_analysis.png'), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"📊 Reasoning analysis saved to reasoning_analysis.png")
+    try:
+        from utils.visualization import plot_reasoning_efficiency
+        
+        # 모든 데이터셋의 추론 스텝을 하나로 합침
+        all_steps = []
+        for dataset_data in reasoning_data.values():
+            if 'convergence_trend' in dataset_data:
+                all_steps.extend(dataset_data['convergence_trend'])
+        
+        if all_steps:
+            plot_reasoning_efficiency(
+                all_steps,
+                save_path=os.path.join(output_dir, 'reasoning_efficiency.png')
+            )
+            print(f"📊 Reasoning efficiency plot saved")
+        
+    except ImportError:
+        print(f"⚠️ Reasoning visualization not available")
 
 def generate_report(df, reasoning_data, output_dir):
     """결과 리포트 생성"""

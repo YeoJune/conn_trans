@@ -172,7 +172,7 @@ def main():
     if args.model == "connection":
         print(f"\n🔍 Analyzing connection patterns...")
         
-        # Connection 통계 출력 (시각화는 선택적)
+        # Connection 통계 출력
         analysis = model.get_connection_analysis()
         print(f"   Connection Statistics:")
         print(f"     Max strength: {analysis['max_connection']:.4f}")
@@ -181,16 +181,22 @@ def main():
         if 'orthogonality_quality' in analysis:
             print(f"     Orthogonality quality: {analysis['orthogonality_quality']:.4f}")
         
-        # 시각화 (utils가 있는 경우에만)
+        # 🎨 간소화된 시각화
         if not args.no_save:
             try:
-                from utils.visualization import visualize_connection_matrix, analyze_reasoning_patterns
+                from utils.visualization import (
+                    visualize_connection_matrix, 
+                    analyze_reasoning_patterns,
+                    compare_model_performance
+                )
+                
+                print(f"   📊 Generating visualizations...")
                 
                 # Connection matrix 시각화
                 visualize_connection_matrix(
                     model, 
                     save_path=os.path.join(args.output_dir, f"connection_matrix_{args.dataset}_{args.model_size}.png"),
-                    title_suffix=f" ({args.dataset})"
+                    title_suffix=f" ({args.dataset}-{args.model_size})"
                 )
                 
                 # 추론 패턴 분석
@@ -199,10 +205,12 @@ def main():
                     save_path=os.path.join(args.output_dir, f"reasoning_patterns_{args.dataset}_{args.model_size}.png")
                 )
                 
-                print(f"   📊 Visualizations saved to {args.output_dir}")
+                print(f"   📊 Basic visualizations saved to {args.output_dir}")
                 
             except ImportError:
                 print(f"   ⚠️ Visualization utils not available, skipping plots")
+            except Exception as e:
+                print(f"   ⚠️ Visualization error: {e}")
 
 if __name__ == "__main__":
     main()
