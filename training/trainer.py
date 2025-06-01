@@ -68,6 +68,18 @@ class Trainer:
         
         total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f"   Total trainable parameters: {total_params:,}")
+
+    def setup_data_collator(self):
+        """T5용 데이터 콜레이터 설정"""
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer must be set before setting up data collator")
+        
+        return T5DataCollator(
+            tokenizer=self.tokenizer,
+            padding=True,
+            max_length=self.config.max_seq_len,
+            return_tensors="pt"
+        )
     
     def set_tokenizer(self, tokenizer):
         """토크나이저 설정"""
@@ -251,7 +263,7 @@ class Trainer:
         return total_loss
     
     def evaluate(self, eval_loader):
-        """T5 최적화된 평가"""
+        """T5 최적화된 평가 (배치 크기 문제 해결)"""
         self.model.eval()
         total_loss = 0
         predictions = []
@@ -261,9 +273,13 @@ class Trainer:
         with torch.no_grad():
             for batch_idx, batch in enumerate(eval_loader):
                 try:
+                    # 텐서 데이터 GPU로 이동
                     input_ids = batch['input_ids'].to(self.device, non_blocking=True)
                     attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
                     labels = batch['labels'].to(self.device, non_blocking=True)
+                    
+                    # 실제 배치 크기 확인 (중요!)
+                    actual_batch_size = input_ids.size(0)
                     
                     # T5 최적화된 forward pass
                     if self.use_bf16:
@@ -286,21 +302,57 @@ class Trainer:
                     # 예측 생성 (T5 디코딩)
                     predicted_ids = torch.argmax(logits, dim=-1)
                     
-                    # 배치 크기만큼 처리
-                    batch_size = predicted_ids.size(0)
-                    for i in range(min(batch_size, 4)):  # 메모리 절약
+                    # target_text 안전하게 처리
+                    batch_target_texts = []
+                    if 'target_text' in batch:
+                        if isinstance(batch['target_text'], (list, tuple)):
+                            batch_target_texts = list(batch['target_text'])
+                        else:
+                            # 단일 문자열인 경우 배치 크기만큼 복제
+                            batch_target_texts = [str(batch['target_text'])] * actual_batch_size
+                    else:
+                        # target_text가 없는 경우 기본값
+                        batch_target_texts = ['N/A'] * actual_batch_size
+                    
+                    # 배치 크기 안전 확인
+                    if len(batch_target_texts) < actual_batch_size:
+                        # 부족한 만큼 'N/A'로 채우기
+                        batch_target_texts.extend(['N/A'] * (actual_batch_size - len(batch_target_texts)))
+                    elif len(batch_target_texts) > actual_batch_size:
+                        # 넘치는 만큼 자르기
+                        batch_target_texts = batch_target_texts[:actual_batch_size]
+                    
+                    # 배치의 각 샘플 처리 (메모리 절약을 위해 최대 4개만)
+                    num_samples_to_process = min(actual_batch_size, 4)
+                    
+                    for i in range(num_samples_to_process):
                         try:
-                            # 예측 디코딩 (-100 토큰 제거)
+                            # 예측 디코딩
                             pred_tokens = predicted_ids[i]
-                            pred_tokens = pred_tokens[pred_tokens != -100]
-                            pred_text = self.tokenizer.decode(pred_tokens, skip_special_tokens=True)
                             
-                            # 타겟 텍스트
-                            target_text = batch.get('target_text', ['N/A'] * batch_size)[i]
+                            # -100 토큰 제거 (T5에서는 보통 필요 없지만 안전하게)
+                            if hasattr(pred_tokens, 'cpu'):
+                                pred_tokens_clean = pred_tokens.cpu()
+                            else:
+                                pred_tokens_clean = pred_tokens
                             
-                            predictions.append(pred_text.strip())
-                            targets.append(target_text.strip())
-                        except:
+                            # 패딩 토큰 제거
+                            if self.tokenizer.pad_token_id is not None:
+                                mask = pred_tokens_clean != self.tokenizer.pad_token_id
+                                pred_tokens_clean = pred_tokens_clean[mask]
+                            
+                            # 텍스트 디코딩
+                            pred_text = self.tokenizer.decode(pred_tokens_clean, skip_special_tokens=True)
+                            
+                            # 타겟 텍스트 가져오기
+                            target_text = batch_target_texts[i] if i < len(batch_target_texts) else 'N/A'
+                            
+                            # 결과 저장
+                            predictions.append(pred_text.strip() if pred_text else "")
+                            targets.append(str(target_text).strip())
+                            
+                        except Exception as decode_error:
+                            print(f"      ⚠️ Decode error for sample {i}: {decode_error}")
                             predictions.append("DECODE_ERROR")
                             targets.append("N/A")
                     
@@ -311,37 +363,72 @@ class Trainer:
                     # 메모리 정리
                     if batch_idx % 10 == 0:
                         torch.cuda.empty_cache()
+                    
+                    # 진행 상황 로그 (선택적)
+                    if batch_idx % 50 == 0:
+                        print(f"      Eval batch {batch_idx}/{len(eval_loader)}, "
+                              f"Loss: {loss.item():.4f}, "
+                              f"Samples: {len(predictions)}")
                         
                 except torch.cuda.OutOfMemoryError:
                     print(f"🚨 OOM during evaluation at batch {batch_idx}, skipping...")
                     torch.cuda.empty_cache()
                     continue
+                    
                 except Exception as e:
                     print(f"⚠️ Evaluation error at batch {batch_idx}: {e}")
+                    print(f"   Batch keys: {batch.keys() if hasattr(batch, 'keys') else 'Not a dict'}")
+                    if hasattr(batch, 'get'):
+                        print(f"   Input shape: {batch.get('input_ids', torch.tensor([])).shape}")
+                        print(f"   Labels shape: {batch.get('labels', torch.tensor([])).shape}")
                     continue
         
         avg_loss = total_loss / len(eval_loader) if len(eval_loader) > 0 else 0
         
-        # 정확도 계산
+        # 정확도 계산 (안전하게)
         try:
-            from utils.metrics import calculate_accuracy
-            accuracy = calculate_accuracy(predictions, targets, self.config.dataset_name) if predictions and targets else 0.0
-        except:
+            if predictions and targets and len(predictions) == len(targets):
+                from utils.metrics import calculate_accuracy
+                accuracy = calculate_accuracy(predictions, targets, self.config.dataset_name)
+            else:
+                print(f"⚠️ Prediction/target mismatch: {len(predictions)} vs {len(targets)}")
+                accuracy = 0.0
+        except Exception as acc_error:
+            print(f"⚠️ Accuracy calculation error: {acc_error}")
             accuracy = 0.0
         
         avg_reasoning_steps = sum(reasoning_steps_list) / len(reasoning_steps_list) if reasoning_steps_list else 0
         
+        # 결과 요약 출력
+        print(f"   📊 Evaluation summary:")
+        print(f"      Total samples processed: {len(predictions)}")
+        print(f"      Average loss: {avg_loss:.4f}")
+        print(f"      Accuracy: {accuracy:.4f}")
+        if reasoning_steps_list:
+            print(f"      Average reasoning steps: {avg_reasoning_steps:.2f}")
+        
         return avg_loss, accuracy, avg_reasoning_steps, predictions[:10], targets[:10]
     
     def train(self, train_dataset, eval_dataset, resume_from=None):
-        """전체 훈련 프로세스 (T5 최적화)"""
-        # 데이터 로더 생성
+        """전체 훈련 프로세스 (T5 최적화, 배치 크기 문제 해결)"""
+        
+        # T5용 데이터 콜레이터 설정
+        from training.data_collator import T5DataCollator
+        data_collator = T5DataCollator(
+            tokenizer=self.tokenizer,
+            padding=True,
+            max_length=self.config.max_seq_len,
+            return_tensors="pt"
+        )
+        
+        # 데이터 로더 생성 (데이터 콜레이터 적용)
         train_loader = DataLoader(
             train_dataset,
             batch_size=self.config.batch_size,
             shuffle=True,
             num_workers=getattr(self.config, 'num_workers', 2),
-            pin_memory=getattr(self.config, 'pin_memory', True)
+            pin_memory=getattr(self.config, 'pin_memory', True),
+            collate_fn=data_collator  # 여기가 중요!
         )
         
         eval_loader = DataLoader(
@@ -349,8 +436,35 @@ class Trainer:
             batch_size=self.config.batch_size,
             shuffle=False,
             num_workers=getattr(self.config, 'num_workers', 2),
-            pin_memory=getattr(self.config, 'pin_memory', True)
+            pin_memory=getattr(self.config, 'pin_memory', True),
+            collate_fn=data_collator  # 여기도!
         )
+        
+        print(f"📊 Data loaders created:")
+        print(f"   Train batches: {len(train_loader)}")
+        print(f"   Eval batches: {len(eval_loader)}")
+        print(f"   Batch size: {self.config.batch_size}")
+        print(f"   Data collator: T5DataCollator (배치 크기 문제 해결)")
+        
+        # 첫 번째 배치 테스트
+        try:
+            print(f"\n🔍 Testing first batch...")
+            first_batch = next(iter(train_loader))
+            print(f"   Batch keys: {list(first_batch.keys())}")
+            
+            for key, value in first_batch.items():
+                if torch.is_tensor(value):
+                    print(f"   {key}: {value.shape}")
+                elif isinstance(value, (list, tuple)):
+                    print(f"   {key}: list of {len(value)} items")
+                else:
+                    print(f"   {key}: {type(value)}")
+            
+            print(f"   ✅ First batch test passed")
+            
+        except Exception as batch_error:
+            print(f"   ❌ First batch test failed: {batch_error}")
+            raise RuntimeError("Data loader setup failed")
         
         # 옵티마이저 설정
         self.setup_optimizer_and_scheduler(train_loader)
