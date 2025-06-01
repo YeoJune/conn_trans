@@ -219,89 +219,20 @@ class BaselineTransformer(nn.Module):
         """Dummy method for compatibility - no reasoning cost for baseline"""
         return torch.tensor(0.0, device=next(self.parameters()).device)
 
-
 def calculate_matching_config_enc_dec(config):
-    """
-    Calculate baseline transformer config to match Connection Transformer parameters.
-    For encoder-decoder architecture.
-    """
-    # Connection Transformer parameters
-    N = config.num_slots
-    D = config.d_model  
-    r = config.bilinear_rank
-    src_V = getattr(config, 'src_vocab_size', 32000)
-    tgt_V = getattr(config, 'tgt_vocab_size', 32000)
-    S = config.max_seq_len
-    
-    # Connection Transformer parameter count
-    bilinear_params = 2 * N * N * D * r
-    cross_attn_params = 3 * D * D  # encoder cross-attention only
-    embedding_params = (src_V + tgt_V + 2 * S) * D  # src + tgt embeddings + positions
-    output_params = D * tgt_V
-    layer_norm_params = config.max_reasoning_steps * 2 * D  # reasoning LayerNorms
-    decoder_layers_params = config.num_decoder_layers * (
-        4 * D * D +  # self-attention
-        4 * D * D +  # cross-attention  
-        2 * D * D * 4 +  # FFN
-        4 * D  # LayerNorms
+    """간단한 baseline 설정 계산"""
+    # Connection Transformer 대략적 파라미터
+    conn_params = (
+        config.num_slots * config.num_slots * config.d_model * config.bilinear_rank * 2 +  # bilinear
+        config.d_model * config.d_model * 3 +  # cross-attention
+        config.vocab_size * config.d_model * 2 +  # embeddings
+        config.d_model * config.vocab_size  # output
     )
     
-    conn_total = bilinear_params + cross_attn_params + embedding_params + output_params + layer_norm_params + decoder_layers_params
-    
-    print(f"\nConnection Transformer (Encoder-Decoder) parameters:")
-    print(f"  Bilinear: {bilinear_params:,}")
-    print(f"  Cross-attention: {cross_attn_params:,}")  
-    print(f"  Embeddings: {embedding_params:,}")
-    print(f"  Output: {output_params:,}")
-    print(f"  Reasoning LayerNorms: {layer_norm_params:,}")
-    print(f"  Decoder layers: {decoder_layers_params:,}")
-    print(f"  Total: {conn_total:,}")
-    
-    # Baseline transformer - shared parameters
-    baseline_shared = embedding_params + output_params + 2 * D  # output LayerNorm
-    available_for_layers = conn_total - baseline_shared
-    
-    # Try different encoder/decoder layer combinations
-    best_config = None
-    best_diff = float('inf')
-    
-    for ffn_mult in [2, 3, 4, 6, 8]:
-        for enc_layers in range(1, 13):
-            for dec_layers in range(1, 13):
-                # Encoder layer parameters
-                enc_attn_params = 4 * D * D  # q, k, v, out projections
-                enc_ffn_params = D * D * ffn_mult + D * ffn_mult * D + D * ffn_mult + D  # linear1 + linear2 + biases
-                enc_ln_params = 4 * D  # 2 LayerNorms * (weight + bias)
-                enc_params_per_layer = enc_attn_params + enc_ffn_params + enc_ln_params
-                
-                # Decoder layer parameters
-                dec_self_attn_params = 4 * D * D  # self-attention
-                dec_cross_attn_params = 4 * D * D  # cross-attention
-                dec_ffn_params = D * D * ffn_mult + D * ffn_mult * D + D * ffn_mult + D  # FFN
-                dec_ln_params = 6 * D  # 3 LayerNorms * (weight + bias)
-                dec_params_per_layer = dec_self_attn_params + dec_cross_attn_params + dec_ffn_params + dec_ln_params
-                
-                total_layer_params = enc_layers * enc_params_per_layer + dec_layers * dec_params_per_layer
-                
-                if total_layer_params <= available_for_layers:
-                    total_baseline = baseline_shared + total_layer_params
-                    diff = abs(total_baseline - conn_total)
-                    
-                    if diff < best_diff:
-                        best_diff = diff
-                        best_config = {
-                            'num_encoder_layers': enc_layers,
-                            'num_decoder_layers': dec_layers,
-                            'ffn_multiplier': ffn_mult,
-                            'total_params': total_baseline,
-                            'param_diff': diff
-                        }
-    
-    print(f"\nMatched Baseline Transformer (Encoder-Decoder):")
-    print(f"  Encoder layers: {best_config['num_encoder_layers']}")
-    print(f"  Decoder layers: {best_config['num_decoder_layers']}")
-    print(f"  FFN multiplier: {best_config['ffn_multiplier']}")
-    print(f"  Total params: {best_config['total_params']:,}")
-    print(f"  Difference: {best_config['param_diff']:,} ({best_config['param_diff']/conn_total*100:.1f}%)")
-    
-    return best_config
+    # 간단한 매칭 (정확하지 않아도 됨)
+    if config.d_model <= 64:
+        return {'num_encoder_layers': 3, 'num_decoder_layers': 3, 'ffn_multiplier': 4}
+    elif config.d_model <= 128:
+        return {'num_encoder_layers': 4, 'num_decoder_layers': 4, 'ffn_multiplier': 4}
+    else:
+        return {'num_encoder_layers': 6, 'num_decoder_layers': 6, 'ffn_multiplier': 4}

@@ -126,6 +126,7 @@ class Trainer:
         return total_loss / max(num_batches // self.gradient_accumulation_steps, 1)
     
     def calculate_loss(self, logits, labels):
+        """간단한 손실 계산"""
         loss_fct = nn.CrossEntropyLoss(
             ignore_index=-100,
             label_smoothing=getattr(self.config, 'label_smoothing', 0.1)
@@ -137,11 +138,10 @@ class Trainer:
         loss = loss_fct(flat_logits, flat_labels)
         
         # Connection Transformer 정규화
-        if self.model_type == "connection":
-            if hasattr(self.model, 'orthogonal_regularization_loss'):
-                orth_loss = self.model.orthogonal_regularization_loss()
-                orth_weight = getattr(self.config, 'orthogonal_weight', 0.01)
-                loss += orth_weight * orth_loss
+        if self.model_type == "connection" and hasattr(self.model, 'orthogonal_regularization_loss'):
+            orth_loss = self.model.orthogonal_regularization_loss()
+            orth_weight = getattr(self.config, 'orthogonal_weight', 0.01)
+            loss += orth_weight * orth_loss
         
         return loss
     
