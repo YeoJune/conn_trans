@@ -4,7 +4,7 @@ from torch.utils.data import Dataset
 from datasets import load_dataset
 
 class MultiNLIDataset(Dataset):
-    """MultiNLI Dataset - Multi-Genre Natural Language Inference (433K examples)"""
+    """MultiNLI Dataset - 자연어 추론 (T5 최적화)"""
     
     def __init__(self, tokenizer, config, split="train"):
         self.tokenizer = tokenizer
@@ -13,18 +13,14 @@ class MultiNLIDataset(Dataset):
         self.answer_max_length = getattr(config, 'answer_max_length', 32)
         self.task_prefix = getattr(config, 'task_prefix', 'infer')
         
-        # MultiNLI 데이터셋 로드
         print(f"📦 Loading MultiNLI dataset ({split} split)...")
         
         try:
-            # HuggingFace에서 공식 MultiNLI 로드
+            # 표준 MultiNLI 데이터셋
             if split == "validation":
-                # MultiNLI는 validation_matched와 validation_mismatched가 있음
-                # matched를 기본으로 사용 (같은 도메인)
                 dataset = load_dataset("multi_nli", split="validation_matched")
                 print(f"✅ Successfully loaded MultiNLI validation_matched")
             elif split == "test":
-                # 테스트 셋도 matched 사용
                 dataset = load_dataset("multi_nli", split="test_matched")
                 print(f"✅ Successfully loaded MultiNLI test_matched")
             else:
@@ -39,7 +35,7 @@ class MultiNLIDataset(Dataset):
         print(f"MultiNLI {split}: {len(self.data):,} examples")
     
     def _preprocess(self, dataset):
-        """데이터셋을 T5 형식으로 전처리"""
+        """T5 적합한 전처리"""
         processed = []
         
         # 라벨 매핑
@@ -50,34 +46,30 @@ class MultiNLIDataset(Dataset):
         }
         
         for item in dataset:
-            # 필드 추출
             premise = item.get('premise', '').strip()
             hypothesis = item.get('hypothesis', '').strip()
             label = item.get('label', -1)
             
-            # 빈 텍스트 처리
-            if not premise:
-                premise = "No premise provided."
-            if not hypothesis:
-                hypothesis = "No hypothesis provided."
+            # 빈 텍스트 건너뛰기
+            if not premise or not hypothesis:
+                continue
             
-            # T5 형식: "infer: premise: <premise> hypothesis: <hypothesis>"
-            input_text = f"{self.task_prefix}: premise: {premise} hypothesis: {hypothesis}"
+            # 입력: "infer: Premise: {premise} Hypothesis: {hypothesis}"
+            input_text = f"{self.task_prefix}: Premise: {premise} Hypothesis: {hypothesis}"
             
-            # 라벨을 텍스트로 변환
+            # 출력: "entailment" / "neutral" / "contradiction"
             if label in label_map:
                 target_text = label_map[label]
             else:
-                # 라벨이 없는 경우 (테스트 셋 등)
-                target_text = "unknown"
+                continue  # 라벨이 없으면 스킵
             
             processed.append({
                 'input_text': input_text,
                 'target_text': target_text,
-                'original_label': label,
                 'premise': premise,
                 'hypothesis': hypothesis,
-                'genre': item.get('genre', 'unknown')  # MultiNLI의 장르 정보
+                'original_label': label,
+                'genre': item.get('genre', 'unknown')
             })
         
         return processed
@@ -86,7 +78,7 @@ class MultiNLIDataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx):
-        """MultiNLI T5 전처리"""
+        """T5용 정확한 데이터 생성"""
         item = self.data[idx]
         
         # 입력 토크나이징
@@ -98,21 +90,25 @@ class MultiNLIDataset(Dataset):
             return_tensors='pt'
         )
         
-        # 타겟 토크나이징
-        targets = self.tokenizer(
-            item['target_text'],
-            max_length=self.answer_max_length,
-            padding='max_length',
-            truncation=True,
-            return_tensors='pt'
-        )
+        # T5 target 토크나이징
+        with self.tokenizer.as_target_tokenizer():
+            targets = self.tokenizer(
+                item['target_text'],
+                max_length=self.answer_max_length,
+                padding='max_length',
+                truncation=True,
+                return_tensors='pt'
+            )
+        
+        # Labels 처리
+        target_ids = targets.input_ids.squeeze()
+        target_ids[target_ids == self.tokenizer.pad_token_id] = -100
         
         return {
             'input_ids': inputs.input_ids.squeeze(),
             'attention_mask': inputs.attention_mask.squeeze(),
-            'labels': targets.input_ids.squeeze(),
+            'labels': target_ids,
             'target_text': item['target_text'],
-            'original_label': item['original_label'],
             'premise': item['premise'],
             'hypothesis': item['hypothesis'],
             'genre': item['genre']

@@ -8,7 +8,6 @@ import time
 import os
 import json
 from utils.metrics import calculate_accuracy, extract_final_answer
-from utils.visualization import plot_training_curves, analyze_reasoning_patterns
 
 class Trainer:
     def __init__(self, model, config, model_type="connection"):
@@ -18,7 +17,7 @@ class Trainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = None
         
-        # 모델을 GPU로 이동하기 전에 메모리 확인
+        # GPU 메모리 확인
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             print(f"GPU Memory before model loading: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
@@ -28,37 +27,42 @@ class Trainer:
         if torch.cuda.is_available():
             print(f"GPU Memory after model loading: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
         
-        # Gradient checkpointing 활성화 (메모리 절약)
-        if hasattr(self.model, 'gradient_checkpointing_enable'):
+        # Gradient checkpointing
+        if config.gradient_checkpointing and hasattr(self.model, 'gradient_checkpointing_enable'):
             self.model.gradient_checkpointing_enable()
             print("Gradient checkpointing enabled")
         
-        # Mixed precision scaler
-        if config.fp16:
+        # 🔥 T5 최적화: Mixed precision 설정
+        self.use_fp16 = getattr(config, 'fp16', False)
+        self.use_bf16 = getattr(config, 'bf16', True) and torch.cuda.is_bf16_supported()
+        
+        if self.use_bf16:
+            print("⚡ BFloat16 training enabled (T5 optimized)")
+            self.scaler = None  # bf16은 scaler 불필요
+        elif self.use_fp16:
+            print("⚡ Float16 training enabled")
             self.scaler = torch.cuda.amp.GradScaler()
-            print("⚡ Mixed precision training enabled")
         else:
+            print("🔧 Float32 training (safer for T5)")
             self.scaler = None
         
         # 메트릭 추적
         self.train_losses = []
         self.eval_accuracies = []
         self.reasoning_steps_history = []
-        
-        # Orthogonal regularization 추적 변수 추가
         self.orthogonal_losses = []
         
-        # Gradient accumulation 설정
+        # Gradient accumulation
         self.gradient_accumulation_steps = getattr(config, 'gradient_accumulation_steps', 1)
         
-        # Config에 orthogonal weight 기본값 설정
+        # T5 특화 설정
         if not hasattr(config, 'orthogonal_weight'):
             config.orthogonal_weight = 0.01
         
-        print(f"🚀 Trainer initialized for {model_type} model on {self.device}")
+        print(f"🚀 T5-Optimized Trainer initialized for {model_type} model on {self.device}")
         print(f"   Gradient accumulation steps: {self.gradient_accumulation_steps}")
+        print(f"   Precision: {'bf16' if self.use_bf16 else 'fp16' if self.use_fp16 else 'fp32'}")
         
-        # Orthogonal regularization 설정 출력
         if model_type == "connection":
             print(f"   Orthogonal regularization weight: {config.orthogonal_weight}")
         
@@ -69,13 +73,13 @@ class Trainer:
         """토크나이저 설정"""
         self.tokenizer = tokenizer
         
-        # 모델에도 pad_token_id 설정 (필요한 경우)
+        # 모델에도 pad_token_id 설정
         if hasattr(self.model, 'pad_token_id'):
-            self.model.pad_token_id = getattr(tokenizer, 'pad_token_id', 0)
+            self.model.pad_token_id = tokenizer.pad_token_id
     
     def setup_optimizer_and_scheduler(self, train_loader):
-        """옵티마이저와 스케줄러 설정"""
-        # 옵티마이저
+        """T5 최적화된 옵티마이저와 스케줄러"""
+        # T5는 더 높은 학습률 필요 (HuggingFace 문서 권장)
         self.optimizer = optim.AdamW(
             self.model.parameters(),
             lr=self.config.learning_rate,
@@ -94,13 +98,13 @@ class Trainer:
             num_training_steps=total_steps
         )
         
-        print(f"📊 Training setup:")
+        print(f"📊 T5 Training setup:")
         print(f"   Total steps: {total_steps:,}")
         print(f"   Warmup steps: {warmup_steps:,}")
-        print(f"   Learning rate: {self.config.learning_rate}")
+        print(f"   Learning rate: {self.config.learning_rate} (T5 optimized)")
     
     def train_epoch(self, train_loader, epoch):
-        """훈련 에폭 - orthogonal regularization 로깅 추가"""
+        """T5 최적화된 훈련 에폭"""
         self.model.train()
         total_loss = 0
         total_reasoning_steps = 0
@@ -110,14 +114,19 @@ class Trainer:
         
         for batch_idx, batch in enumerate(train_loader):
             try:
-                # 데이터를 GPU로 이동
                 input_ids = batch['input_ids'].to(self.device, non_blocking=True)
                 attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
                 labels = batch['labels'].to(self.device, non_blocking=True)
                 
-                # Forward pass with mixed precision
-                if self.config.fp16:
-                    with torch.amp.autocast(device_type='cuda'):
+                # 🔥 T5 최적화: 적절한 precision 사용
+                if self.use_bf16:
+                    with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                        outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
+                        logits, reasoning_info = outputs
+                        loss = self.calculate_loss(logits, labels, reasoning_info)
+                        loss = loss / self.gradient_accumulation_steps
+                elif self.use_fp16:
+                    with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
                         outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
                         logits, reasoning_info = outputs
                         loss = self.calculate_loss(logits, labels, reasoning_info)
@@ -129,22 +138,22 @@ class Trainer:
                     loss = loss / self.gradient_accumulation_steps
                 
                 # Backward pass
-                if self.config.fp16:
+                if self.use_fp16 and self.scaler:
                     self.scaler.scale(loss).backward()
                 else:
                     loss.backward()
                 
                 accumulated_loss += loss.item()
                 
-                # Orthogonal loss 개별 추적
+                # Orthogonal loss 추적
                 if self.model_type == "connection" and hasattr(self.model, 'orthogonal_regularization_loss'):
                     with torch.no_grad():
                         orth_loss = self.model.orthogonal_regularization_loss()
                         total_orthogonal_loss += orth_loss.item()
                 
-                # Gradient step (accumulation 완료 시에만)
+                # Gradient step
                 if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
-                    if self.config.fp16:
+                    if self.use_fp16 and self.scaler:
                         self.scaler.unscale_(self.optimizer)
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
                         self.scaler.step(self.optimizer)
@@ -156,7 +165,6 @@ class Trainer:
                     self.scheduler.step()
                     self.optimizer.zero_grad()
                     
-                    # 메트릭 누적
                     total_loss += accumulated_loss
                     accumulated_loss = 0
                 
@@ -164,8 +172,8 @@ class Trainer:
                     total_reasoning_steps += reasoning_info['actual_steps']
                 num_batches += 1
                 
-                # 메모리 정리 (주기적)
-                if batch_idx % getattr(self.config, 'empty_cache_every', 100) == 0:
+                # 메모리 정리 (T5는 메모리 많이 사용)
+                if batch_idx % getattr(self.config, 'empty_cache_every', 25) == 0:
                     torch.cuda.empty_cache()
                 
                 if batch_idx % self.config.log_every == 0:
@@ -178,7 +186,6 @@ class Trainer:
                               f"LR: {current_lr:.2e} Steps: {actual_steps} "
                               f"GPU: {memory_used:.1f}GB")
                     
-                    # Orthogonal loss 로깅 추가
                     if self.model_type == "connection" and total_orthogonal_loss > 0:
                         avg_orth_loss = total_orthogonal_loss / max(num_batches, 1)
                         log_msg += f" Orth: {avg_orth_loss:.4f}"
@@ -205,36 +212,20 @@ class Trainer:
     
     def calculate_loss(self, logits, labels, reasoning_info):
         """
-        손실 함수 계산
+        T5 최적화된 손실 함수 계산
         """
-        # T5 tokenizer의 pad_token_id 사용
-        pad_token_id = getattr(self.tokenizer, 'pad_token_id', 0)
-        if pad_token_id is None:
-            pad_token_id = 0
+        # T5 tokenizer의 pad_token_id 사용 (기본값: 0)
+        pad_token_id = self.tokenizer.pad_token_id if self.tokenizer else 0
         
-        batch_size = logits.size(0)
-        seq_len_in = logits.size(1)
-        vocab_size = logits.size(2)
-        seq_len_out = labels.size(1)
+        # 🔥 T5 중요: CrossEntropyLoss에서 -100인 토큰은 자동으로 무시됨
+        loss_fct = nn.CrossEntropyLoss(
+            ignore_index=-100,  # T5에서 padding은 -100으로 처리
+            label_smoothing=getattr(self.config, 'label_smoothing', 0.1)  # T5에 효과적
+        )
         
-        # Cross entropy 계산을 위해 올바른 형태로 변환
-        if seq_len_in != seq_len_out:
-            if seq_len_out < seq_len_in:
-                logits_for_loss = logits[:, :seq_len_out, :]
-            else:
-                pad_length = seq_len_out - seq_len_in
-                padding = torch.full((batch_size, pad_length, vocab_size), 
-                                float('-inf'), device=logits.device)
-                padding[:, :, pad_token_id] = 0
-                logits_for_loss = torch.cat([logits, padding], dim=1)
-        else:
-            logits_for_loss = logits
-        
-        # Loss 계산
-        loss_fct = nn.CrossEntropyLoss(ignore_index=pad_token_id, label_smoothing=0.1)
-        
-        flat_logits = logits_for_loss.reshape(-1, vocab_size)
-        flat_labels = labels.reshape(-1)
+        # Logits reshape: [batch_size * seq_len, vocab_size]
+        flat_logits = logits.view(-1, logits.size(-1))
+        flat_labels = labels.view(-1)
         
         lm_loss = loss_fct(flat_logits, flat_labels)
         
@@ -260,7 +251,7 @@ class Trainer:
         return total_loss
     
     def evaluate(self, eval_loader):
-        """메모리 효율적인 평가"""
+        """T5 최적화된 평가"""
         self.model.eval()
         total_loss = 0
         predictions = []
@@ -274,9 +265,14 @@ class Trainer:
                     attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
                     labels = batch['labels'].to(self.device, non_blocking=True)
                     
-                    # Forward pass (mixed precision)
-                    if self.config.fp16:
-                        with torch.amp.autocast(device_type='cuda'):
+                    # T5 최적화된 forward pass
+                    if self.use_bf16:
+                        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                            outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
+                            logits, reasoning_info = outputs
+                            loss = self.calculate_loss(logits, labels, reasoning_info)
+                    elif self.use_fp16:
+                        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
                             outputs = self.model(input_ids, attention_mask, return_reasoning_trace=True)
                             logits, reasoning_info = outputs
                             loss = self.calculate_loss(logits, labels, reasoning_info)
@@ -287,17 +283,20 @@ class Trainer:
                     
                     total_loss += loss.item()
                     
-                    # 간단한 예측 생성 (메모리 절약)
-                    with torch.amp.autocast(device_type='cuda', enabled=False):  # autocast 비활성화
-                        seq_len = min(logits.size(1), labels.size(1))
-                        predicted_ids = torch.argmax(logits[:, :seq_len, :], dim=-1)
+                    # 예측 생성 (T5 디코딩)
+                    predicted_ids = torch.argmax(logits, dim=-1)
                     
                     # 배치 크기만큼 처리
                     batch_size = predicted_ids.size(0)
-                    for i in range(min(batch_size, 4)):  # 메모리 절약을 위해 최대 4개만 디코딩
+                    for i in range(min(batch_size, 4)):  # 메모리 절약
                         try:
-                            pred_text = self.tokenizer.decode(predicted_ids[i], skip_special_tokens=True)
-                            target_text = batch['target_text'][i] if 'target_text' in batch else "N/A"
+                            # 예측 디코딩 (-100 토큰 제거)
+                            pred_tokens = predicted_ids[i]
+                            pred_tokens = pred_tokens[pred_tokens != -100]
+                            pred_text = self.tokenizer.decode(pred_tokens, skip_special_tokens=True)
+                            
+                            # 타겟 텍스트
+                            target_text = batch.get('target_text', ['N/A'] * batch_size)[i]
                             
                             predictions.append(pred_text.strip())
                             targets.append(target_text.strip())
@@ -326,94 +325,31 @@ class Trainer:
         # 정확도 계산
         try:
             from utils.metrics import calculate_accuracy
-            accuracy = calculate_accuracy(predictions, targets, self.config.dataset_type) if predictions and targets else 0.0
+            accuracy = calculate_accuracy(predictions, targets, self.config.dataset_name) if predictions and targets else 0.0
         except:
             accuracy = 0.0
         
         avg_reasoning_steps = sum(reasoning_steps_list) / len(reasoning_steps_list) if reasoning_steps_list else 0
         
-        return avg_loss, accuracy, avg_reasoning_steps, predictions[:10], targets[:10]  # 샘플만 반환
-
-    def generate_predictions(self, input_ids, attention_mask, max_new_tokens=50):
-        """
-        예측 텍스트 생성 - T5 특화 버전
-        """
-        batch_size = input_ids.size(0)
-        predictions = []
-        
-        # T5 tokenizer 토큰 ID들
-        eos_token_id = getattr(self.tokenizer, 'eos_token_id', 1)
-        pad_token_id = getattr(self.tokenizer, 'pad_token_id', 0)
-        
-        with torch.no_grad():
-            for i in range(batch_size):
-                # 각 샘플에 대해 개별적으로 생성
-                single_input = input_ids[i:i+1]
-                single_mask = attention_mask[i:i+1] if attention_mask is not None else None
-                
-                # T5는 encoder-decoder 구조이지만, 여기서는 단순화된 생성 사용
-                # 실제 T5에서는 generate() 메서드를 사용해야 함
-                
-                # 단순한 next-token prediction으로 생성
-                generated_ids = []
-                current_input = single_input
-                
-                for step in range(max_new_tokens):
-                    outputs = self.model(current_input, attention_mask=single_mask)
-                    if isinstance(outputs, tuple):
-                        logits = outputs[0]
-                    else:
-                        logits = outputs
-                    
-                    # 마지막 토큰의 logits에서 다음 토큰 예측
-                    next_token_logits = logits[:, -1, :]
-                    next_token = torch.argmax(next_token_logits, dim=-1)
-                    next_token_id = next_token.item()
-                    
-                    # EOS 토큰이면 중단
-                    if next_token_id == eos_token_id:
-                        break
-                    
-                    generated_ids.append(next_token_id)
-                    
-                    # 다음 입력 준비 (현재 구현에서는 단순화)
-                    break  # 실제로는 generated token을 append해야 함
-                
-                # 디코딩
-                try:
-                    if generated_ids:
-                        prediction = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
-                    else:
-                        # Fallback: 입력에서 직접 예측 (단순화)
-                        output_logits = self.model(single_input, single_mask)
-                        if isinstance(output_logits, tuple):
-                            output_logits = output_logits[0]
-                        predicted_token = torch.argmax(output_logits[:, -1, :], dim=-1)
-                        prediction = self.tokenizer.decode([predicted_token.item()], skip_special_tokens=True)
-                except:
-                    prediction = ""
-                
-                predictions.append(prediction.strip())
-        
-        return predictions
+        return avg_loss, accuracy, avg_reasoning_steps, predictions[:10], targets[:10]
     
     def train(self, train_dataset, eval_dataset, resume_from=None):
-        """전체 훈련 프로세스"""
+        """전체 훈련 프로세스 (T5 최적화)"""
         # 데이터 로더 생성
         train_loader = DataLoader(
             train_dataset,
             batch_size=self.config.batch_size,
             shuffle=True,
-            num_workers=self.config.num_workers,
-            pin_memory=self.config.pin_memory
+            num_workers=getattr(self.config, 'num_workers', 2),
+            pin_memory=getattr(self.config, 'pin_memory', True)
         )
         
         eval_loader = DataLoader(
             eval_dataset,
             batch_size=self.config.batch_size,
             shuffle=False,
-            num_workers=self.config.num_workers,
-            pin_memory=self.config.pin_memory
+            num_workers=getattr(self.config, 'num_workers', 2),
+            pin_memory=getattr(self.config, 'pin_memory', True)
         )
         
         # 옵티마이저 설정
@@ -431,13 +367,13 @@ class Trainer:
             best_accuracy = checkpoint.get('best_accuracy', 0.0)
             print(f"📂 Resumed from epoch {start_epoch}, best accuracy: {best_accuracy:.4f}")
         
-        print(f"\n🚀 Starting training for {self.config.num_epochs} epochs")
+        print(f"\n🚀 Starting T5-optimized training for {self.config.num_epochs} epochs")
         print("="*70)
         
         for epoch in range(start_epoch, self.config.num_epochs):
             epoch_start_time = time.time()
             
-            # 훈련 - orthogonal loss 포함
+            # 훈련
             train_loss, avg_reasoning_steps, avg_orthogonal_loss = self.train_epoch(train_loader, epoch)
             
             # 평가
@@ -448,7 +384,6 @@ class Trainer:
             self.eval_accuracies.append(accuracy)
             self.reasoning_steps_history.append(avg_reasoning_steps)
             
-            # Orthogonal loss 기록
             if self.model_type == "connection":
                 self.orthogonal_losses.append(avg_orthogonal_loss)
             
@@ -462,13 +397,14 @@ class Trainer:
                 print(f"  Avg Reasoning Steps: {avg_reasoning_steps:.2f}")
                 print(f"  Orthogonal Loss: {avg_orthogonal_loss:.4f}")
                 
-                # Connection 품질 분석 출력
+                # Connection 품질 분석
                 if hasattr(self.model, 'get_connection_analysis'):
                     analysis = self.model.get_connection_analysis()
                     print(f"  Connection Quality:")
                     print(f"    Max strength: {analysis['max_connection']:.4f}")
                     print(f"    Mean strength: {analysis['mean_connection']:.4f}")
-                    print(f"    Orthogonality quality: {analysis['orthogonality_quality']:.4f}")
+                    if 'orthogonality_quality' in analysis:
+                        print(f"    Orthogonality quality: {analysis['orthogonality_quality']:.4f}")
             
             # 최고 성능 모델 저장
             if accuracy > best_accuracy:
@@ -482,10 +418,10 @@ class Trainer:
             
             print("-" * 70)
         
-        print(f"\n✅ Training completed!")
+        print(f"\n✅ T5-optimized training completed!")
         print(f"   Best accuracy: {best_accuracy:.4f}")
         
-        # 훈련 결과 시각화 및 분석
+        # 훈련 결과 저장
         self.save_training_results(best_accuracy, predictions[:10], targets[:10])
         
         return best_accuracy
@@ -502,7 +438,9 @@ class Trainer:
             'config': self.config.to_dict(),
             'train_losses': self.train_losses,
             'eval_accuracies': self.eval_accuracies,
-            'reasoning_steps_history': self.reasoning_steps_history
+            'reasoning_steps_history': self.reasoning_steps_history,
+            'model_type': self.model_type,
+            'precision': 'bf16' if self.use_bf16 else 'fp16' if self.use_fp16 else 'fp32'
         }
         
         if is_best:
@@ -511,7 +449,7 @@ class Trainer:
             torch.save(checkpoint, os.path.join(self.config.output_dir, f'checkpoint_{self.model_type}_{self.config.dataset_name}_epoch_{epoch}.pt'))
 
     def save_training_results(self, best_accuracy, sample_predictions, sample_targets):
-        """훈련 결과 저장 - orthogonal loss 포함"""
+        """T5 최적화된 훈련 결과 저장"""
         
         results = {
             'model_type': self.model_type,
@@ -523,10 +461,17 @@ class Trainer:
             'reasoning_steps_history': self.reasoning_steps_history,
             'sample_predictions': sample_predictions,
             'sample_targets': sample_targets,
-            'timestamp': time.strftime("%Y%m%d_%H%M%S")
+            'timestamp': time.strftime("%Y%m%d_%H%M%S"),
+            't5_optimizations': {
+                'precision': 'bf16' if self.use_bf16 else 'fp16' if self.use_fp16 else 'fp32',
+                'tokenizer': self.config.tokenizer_name,
+                'learning_rate': self.config.learning_rate,
+                'gradient_clip': self.config.gradient_clip,
+                'label_smoothing': getattr(self.config, 'label_smoothing', 0.1)
+            }
         }
         
-        # Connection Transformer 전용 메트릭 추가
+        # Connection Transformer 전용 메트릭
         if self.model_type == "connection":
             results['orthogonal_losses'] = getattr(self, 'orthogonal_losses', [])
             
@@ -536,29 +481,38 @@ class Trainer:
                 results['final_connection_analysis'] = {
                     'max_connection': final_analysis['max_connection'],
                     'mean_connection': final_analysis['mean_connection'],
-                    'sparsity_ratio': final_analysis['sparsity_ratio'],
-                    'orthogonality_quality': final_analysis['orthogonality_quality'],
-                    'orthogonality_error': final_analysis['orthogonality_error']
+                    'sparsity_ratio': final_analysis['sparsity_ratio']
                 }
+                if 'orthogonality_quality' in final_analysis:
+                    results['final_connection_analysis']['orthogonality_quality'] = final_analysis['orthogonality_quality']
+                    results['final_connection_analysis']['orthogonality_error'] = final_analysis['orthogonality_error']
         
         filename = os.path.join(self.config.output_dir, f'results_{self.model_type}_{self.config.dataset_name}_{results["timestamp"]}.json')
         with open(filename, 'w') as f:
             json.dump(results, f, indent=2, default=str)
         
-        print(f"📊 Results saved to {filename}")
+        print(f"📊 T5-optimized results saved to {filename}")
         
-        # 시각화
+        # 시각화 (선택적)
         if len(self.train_losses) > 1:
-            plot_training_curves(
-                self.train_losses, 
-                self.eval_accuracies, 
-                self.reasoning_steps_history,
-                save_path=os.path.join(self.config.output_dir, f'training_curves_{self.model_type}_{self.config.dataset_name}.png')
-            )
+            try:
+                from utils.visualization import plot_training_curves
+                plot_training_curves(
+                    self.train_losses, 
+                    self.eval_accuracies, 
+                    self.reasoning_steps_history,
+                    save_path=os.path.join(self.config.output_dir, f'training_curves_{self.model_type}_{self.config.dataset_name}.png')
+                )
+            except ImportError:
+                print("⚠️ Visualization not available")
         
         # Connection Transformer 분석
         if self.model_type == "connection" and hasattr(self.model, 'get_connection_analysis'):
-            analyze_reasoning_patterns(
-                self.model,
-                save_path=os.path.join(self.config.output_dir, f'reasoning_analysis_{self.config.dataset_name}.png')
-            )
+            try:
+                from utils.visualization import analyze_reasoning_patterns
+                analyze_reasoning_patterns(
+                    self.model,
+                    save_path=os.path.join(self.config.output_dir, f'reasoning_analysis_{self.config.dataset_name}.png')
+                )
+            except ImportError:
+                print("⚠️ Connection analysis visualization not available")

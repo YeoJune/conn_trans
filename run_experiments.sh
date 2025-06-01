@@ -58,12 +58,12 @@ run_experiment "strategyqa" "connection" "tiny" "Connection Transformer (tiny) o
 run_experiment "strategyqa" "baseline" "tiny" "Baseline Transformer (tiny) on StrategyQA"
 
 # LogiQA (8,027 examples)
-run_experiment "logiqa" "connection" "micro" "Connection Transformer (micro) on LogiQA"
-run_experiment "logiqa" "baseline" "micro" "Baseline Transformer (micro) on LogiQA"
+run_experiment "logiqa" "connection" "tiny" "Connection Transformer (tiny) on LogiQA"
+run_experiment "logiqa" "baseline" "tiny" "Baseline Transformer (tiny) on LogiQA"
 
 # GSM8K (8,792 examples)
-run_experiment "gsm8k" "connection" "small" "Connection Transformer (small) on GSM8K"
-run_experiment "gsm8k" "baseline" "small" "Baseline Transformer (small) on GSM8K"
+run_experiment "gsm8k" "connection" "tiny" "Connection Transformer (tiny) on GSM8K"
+run_experiment "gsm8k" "baseline" "tiny" "Baseline Transformer (tiny) on GSM8K"
 
 echo -e "${GREEN}✅ Phase 1 completed!${NC}"
 echo ""
