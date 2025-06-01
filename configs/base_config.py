@@ -66,10 +66,11 @@ class BaseConfig:
     convergence_threshold = 0.1
     
     # Encoder-Decoder Vocabulary 설정 (토크나이저에서 자동 설정됨)
-    src_vocab_size = 32128  # T5-base 기본값 (실제는 tokenizer에서 설정)
-    tgt_vocab_size = 32128  # T5-base 기본값 (실제는 tokenizer에서 설정)
-    src_pad_token_id = 0    # T5 기본값 (실제는 tokenizer에서 설정)
-    tgt_pad_token_id = 0    # T5 기본값 (실제는 tokenizer에서 설정)
+    src_vocab_size = None  # Will be set by tokenizer
+    tgt_vocab_size = None  # Will be set by tokenizer
+    src_pad_token_id = None  # Will be set by tokenizer
+    tgt_pad_token_id = None  # Will be set by tokenizer
+    vocab_size = None  # Compatibility - will be set by tokenizer
     
     # T5 최적화된 훈련 설정
     learning_rate = 1e-4        

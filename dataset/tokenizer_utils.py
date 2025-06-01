@@ -11,7 +11,7 @@ def get_tokenizer_and_dataset(dataset_name, config):
     Encoder-Decoder 모델용 토크나이저와 데이터셋 로딩
     """
     
-    print(f"🔄 Loading T5 tokenizer for Encoder-Decoder: {config.tokenizer_name}")
+    print(f"🔄 Loading T5 tokenizer: {config.tokenizer_name}")
     
     try:
         tokenizer = T5Tokenizer.from_pretrained(
@@ -23,19 +23,18 @@ def get_tokenizer_and_dataset(dataset_name, config):
         print(f"⚠️ Latest tokenizer failed, using fallback: {e}")
         tokenizer = T5Tokenizer.from_pretrained(config.tokenizer_name)
     
-    # Encoder-Decoder 모델용 vocabulary 설정
+    # Config에 실제 tokenizer vocab_size 설정
     config.src_vocab_size = tokenizer.vocab_size
     config.tgt_vocab_size = tokenizer.vocab_size
     config.src_pad_token_id = tokenizer.pad_token_id
     config.tgt_pad_token_id = tokenizer.pad_token_id
+    config.vocab_size = tokenizer.vocab_size
     
-    print(f"✅ Encoder-Decoder Tokenizer info:")
-    print(f"   - Source vocab size: {config.src_vocab_size:,}")
-    print(f"   - Target vocab size: {config.tgt_vocab_size:,}")
-    print(f"   - Source pad token: '{tokenizer.pad_token}' (id: {config.src_pad_token_id})")
-    print(f"   - Target pad token: '{tokenizer.pad_token}' (id: {config.tgt_pad_token_id})")
+    print(f"✅ Tokenizer info:")
+    print(f"   - Vocab size: {tokenizer.vocab_size:,}")
+    print(f"   - Pad token: '{tokenizer.pad_token}' (id: {tokenizer.pad_token_id})")
     print(f"   - EOS token: '{tokenizer.eos_token}' (id: {tokenizer.eos_token_id})")
-    
+
     # 데이터셋 클래스 매핑
     dataset_classes = {
         "logiqa": LogiQADataset,
