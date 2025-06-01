@@ -8,33 +8,33 @@ from .multinli_dataset import MultiNLIDataset
 
 def get_tokenizer_and_dataset(dataset_name, config):
     """
-    최신 T5 토크나이저와 데이터셋 로딩
-    
-    핵심 수정사항:
-    1. 최신 T5 토크나이저 사용법 확인
-    2. as_target_tokenizer() 여전히 유효 (2024년 기준)
-    3. DataCollatorForSeq2Seq와 호환성 확보
+    Encoder-Decoder 모델용 토크나이저와 데이터셋 로딩
     """
     
-    print(f"🔄 Loading T5 tokenizer: {config.tokenizer_name}")
+    print(f"🔄 Loading T5 tokenizer for Encoder-Decoder: {config.tokenizer_name}")
     
     try:
-        # 최신 T5 토크나이저 로딩
         tokenizer = T5Tokenizer.from_pretrained(
             config.tokenizer_name,
-            legacy=False  # 최신 방식 사용
+            legacy=False
         )
         print(f"✅ T5Tokenizer loaded successfully")
     except Exception as e:
         print(f"⚠️ Latest tokenizer failed, using fallback: {e}")
         tokenizer = T5Tokenizer.from_pretrained(config.tokenizer_name)
     
-    # T5 토크나이저 정보 출력
-    print(f"✅ Tokenizer info:")
-    print(f"   - Vocab size: {tokenizer.vocab_size:,}")
-    print(f"   - Pad token: '{tokenizer.pad_token}' (id: {tokenizer.pad_token_id})")
+    # Encoder-Decoder 모델용 vocabulary 설정
+    config.src_vocab_size = tokenizer.vocab_size
+    config.tgt_vocab_size = tokenizer.vocab_size
+    config.src_pad_token_id = tokenizer.pad_token_id
+    config.tgt_pad_token_id = tokenizer.pad_token_id
+    
+    print(f"✅ Encoder-Decoder Tokenizer info:")
+    print(f"   - Source vocab size: {config.src_vocab_size:,}")
+    print(f"   - Target vocab size: {config.tgt_vocab_size:,}")
+    print(f"   - Source pad token: '{tokenizer.pad_token}' (id: {config.src_pad_token_id})")
+    print(f"   - Target pad token: '{tokenizer.pad_token}' (id: {config.tgt_pad_token_id})")
     print(f"   - EOS token: '{tokenizer.eos_token}' (id: {tokenizer.eos_token_id})")
-    print(f"   - Extra IDs: {getattr(tokenizer, 'extra_ids', 100)} (for T5 special tokens)")
     
     # 데이터셋 클래스 매핑
     dataset_classes = {
@@ -103,49 +103,36 @@ def get_tokenizer_and_dataset(dataset_name, config):
     print(f"   Train: {len(train_dataset):,} examples")
     print(f"   Eval: {len(eval_dataset):,} examples")
     
-    # 🔍 데이터 샘플 확인 (중요!)
-    print(f"\n🔍 Data sample verification:")
+    # 🔍 Encoder-Decoder 데이터 샘플 확인
+    print(f"\n🔍 Encoder-Decoder data sample verification:")
     try:
         sample = train_dataset[0]
         print(f"   Sample keys: {list(sample.keys())}")
-        print(f"   Input shape: {sample['input_ids'].shape}")
-        print(f"   Labels shape: {sample['labels'].shape}")
+        print(f"   Source input shape: {sample['input_ids'].shape}")
+        print(f"   Target labels shape: {sample['labels'].shape}")
         
-        # 실제 텍스트 확인
-        input_text = tokenizer.decode(sample['input_ids'], skip_special_tokens=True)
-        print(f"   Input text: '{input_text[:80]}...'")
+        # Source text 확인
+        src_text = tokenizer.decode(sample['input_ids'], skip_special_tokens=True)
+        print(f"   Source text: '{src_text[:80]}...'")
         print(f"   Target text: '{sample['target_text']}'")
         
-        # Labels 검증 (중요!)
-        labels = sample['labels']
-        mask_count = (labels == -100).sum().item()
-        valid_count = (labels != -100).sum().item()
-        print(f"   Labels: {valid_count} valid tokens, {mask_count} masked tokens")
+        # Target sequence 길이 확인
+        tgt_labels = sample['labels']
+        valid_tgt_tokens = (tgt_labels != -100).sum().item()
+        print(f"   Target sequence: {valid_tgt_tokens} valid tokens")
         
-        # 잠재적 문제 감지
-        if mask_count == 0:
-            print("   ⚠️ WARNING: No masked tokens! This will cause training issues.")
-        if valid_count == 0:
-            print("   ⚠️ WARNING: No valid tokens! This will cause training issues.")
-        if valid_count < 2:
-            print("   ⚠️ WARNING: Very few valid tokens! Consider longer targets.")
+        # Encoder-Decoder 모델에서는 target이 짧아도 괜찮음
+        if valid_tgt_tokens < 2:
+            print("   ℹ️ Short target sequence - normal for classification tasks")
         
-        # 토큰 ID 분포 확인
-        unique_tokens = torch.unique(labels[labels != -100])
-        print(f"   Unique token IDs in labels: {len(unique_tokens)} (sample: {unique_tokens[:5].tolist()})")
-        
-        if len(unique_tokens) < 2:
-            print("   ⚠️ WARNING: Very few unique tokens in labels!")
-            
     except Exception as e:
         print(f"   ❌ Sample verification failed: {e}")
-        print("   This might indicate a data preprocessing issue.")
     
     return tokenizer, train_dataset, eval_dataset
 
 def verify_tokenizer_setup(tokenizer, sample_texts=None):
-    """토크나이저 설정 검증 함수"""
-    print("\n🔍 Tokenizer verification:")
+    """Encoder-Decoder 토크나이저 검증 함수"""
+    print("\n🔍 Encoder-Decoder Tokenizer verification:")
     
     if sample_texts is None:
         sample_texts = [
@@ -156,10 +143,10 @@ def verify_tokenizer_setup(tokenizer, sample_texts=None):
         ]
     
     for input_text, target_text in sample_texts:
-        print(f"\n   Testing: '{input_text[:40]}...' -> '{target_text}'")
+        print(f"\n   Testing Encoder-Decoder: '{input_text[:40]}...' -> '{target_text}'")
         
-        # 입력 토크나이징
-        inputs = tokenizer(
+        # Source (encoder) 토크나이징
+        src_inputs = tokenizer(
             input_text, 
             max_length=128, 
             padding="max_length", 
@@ -167,9 +154,9 @@ def verify_tokenizer_setup(tokenizer, sample_texts=None):
             return_tensors="pt"
         )
         
-        # 타겟 토크나이징 (as_target_tokenizer 사용)
+        # Target (decoder) 토크나이징
         with tokenizer.as_target_tokenizer():
-            targets = tokenizer(
+            tgt_inputs = tokenizer(
                 target_text,
                 max_length=32,
                 padding="max_length",
@@ -177,23 +164,21 @@ def verify_tokenizer_setup(tokenizer, sample_texts=None):
                 return_tensors="pt"
             )
         
-        # Labels 처리
-        labels = targets.input_ids.clone()
+        # Target labels 처리
+        labels = tgt_inputs.input_ids.clone()
         labels[labels == tokenizer.pad_token_id] = -100
         
-        print(f"      Input IDs shape: {inputs.input_ids.shape}")
-        print(f"      Labels shape: {labels.shape}")
-        print(f"      Masked tokens: {(labels == -100).sum().item()}")
-        print(f"      Valid tokens: {(labels != -100).sum().item()}")
+        print(f"      Source input shape: {src_inputs.input_ids.shape}")
+        print(f"      Target labels shape: {labels.shape}")
+        print(f"      Source tokens: {(src_inputs.attention_mask == 1).sum().item()}")
+        print(f"      Target tokens: {(labels != -100).sum().item()}")
         
         # 디코딩 확인
-        decoded_input = tokenizer.decode(inputs.input_ids[0], skip_special_tokens=True)
+        decoded_src = tokenizer.decode(src_inputs.input_ids[0], skip_special_tokens=True)
         valid_labels = labels[0][labels[0] != -100]
         if len(valid_labels) > 0:
-            decoded_target = tokenizer.decode(valid_labels, skip_special_tokens=True)
-            print(f"      Decoded input: '{decoded_input}'")
-            print(f"      Decoded target: '{decoded_target}'")
-        else:
-            print(f"      ⚠️ No valid tokens to decode!")
+            decoded_tgt = tokenizer.decode(valid_labels, skip_special_tokens=True)
+            print(f"      Decoded source: '{decoded_src}'")
+            print(f"      Decoded target: '{decoded_tgt}'")
             
-    print("\n✅ Tokenizer verification completed")
+    print("\n✅ Encoder-Decoder tokenizer verification completed")

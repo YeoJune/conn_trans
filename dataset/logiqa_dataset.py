@@ -161,15 +161,15 @@ class LogiQADataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx):
-        """호환성 개선된 데이터 반환"""
+        """Encoder-Decoder 호환 데이터 반환"""
         if idx >= len(self.data):
             raise IndexError(f"Index {idx} out of range for dataset of size {len(self.data)}")
         
         item = self.data[idx]
         
         try:
-            # 입력 토크나이징
-            inputs = self.tokenizer(
+            # Source (encoder) 입력 토크나이징
+            src_inputs = self.tokenizer(
                 item['input_text'],
                 max_length=self.max_length,
                 padding='max_length',
@@ -177,9 +177,9 @@ class LogiQADataset(Dataset):
                 return_tensors='pt'
             )
             
-            # T5 타겟 토크나이징
+            # Target (decoder) 토크나이징
             with self.tokenizer.as_target_tokenizer():
-                targets = self.tokenizer(
+                tgt_inputs = self.tokenizer(
                     item['target_text'],
                     max_length=self.answer_max_length,
                     padding='max_length',
@@ -187,13 +187,15 @@ class LogiQADataset(Dataset):
                     return_tensors='pt'
                 )
             
-            # Labels 처리: -100으로 마스킹
-            labels = targets.input_ids.squeeze().clone()
+            # Target labels 처리
+            labels = tgt_inputs.input_ids.squeeze().clone()
             labels[labels == self.tokenizer.pad_token_id] = -100
             
             return {
-                'input_ids': inputs.input_ids.squeeze(),
-                'attention_mask': inputs.attention_mask.squeeze(),
+                'input_ids': src_inputs.input_ids.squeeze(),
+                'attention_mask': src_inputs.attention_mask.squeeze(),
+                'decoder_input_ids': tgt_inputs.input_ids.squeeze(),
+                'decoder_attention_mask': tgt_inputs.attention_mask.squeeze(),
                 'labels': labels,
                 'target_text': item['target_text'],
                 'question': item['question']
@@ -201,10 +203,11 @@ class LogiQADataset(Dataset):
             
         except Exception as e:
             print(f"⚠️ Error in __getitem__ for index {idx}: {e}")
-            # 안전한 기본값 반환
             return {
                 'input_ids': torch.zeros(self.max_length, dtype=torch.long),
                 'attention_mask': torch.zeros(self.max_length, dtype=torch.long),
+                'decoder_input_ids': torch.zeros(self.answer_max_length, dtype=torch.long),
+                'decoder_attention_mask': torch.zeros(self.answer_max_length, dtype=torch.long),
                 'labels': torch.full((self.answer_max_length,), -100, dtype=torch.long),
                 'target_text': "A",
                 'question': "Error loading question"
