@@ -5,10 +5,11 @@ from typing import Any, Dict, List, Union
 
 @dataclass
 class T5DataCollator:
-    """T5 Encoder-Decoder용 데이터 콜레이터"""
+    """Improved T5 data collator with better error handling"""
+    
     tokenizer: Any
+    max_length: int = 512
     padding: Union[bool, str] = True
-    max_length: int = None
     return_tensors: str = "pt"
     
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -16,34 +17,51 @@ class T5DataCollator:
             return {}
         
         batch = {}
-        tensor_keys = ['input_ids', 'attention_mask', 'decoder_input_ids', 'decoder_attention_mask', 'labels']
         
-        # 텐서 필드 처리
-        for key in tensor_keys:
-            if key in features[0]:
-                tensors = [f[key] for f in features if torch.is_tensor(f[key])]
+        # Process tensor fields
+        tensor_fields = ['input_ids', 'attention_mask', 'decoder_input_ids', 'decoder_attention_mask', 'labels']
+        
+        for field in tensor_fields:
+            if field in features[0]:
+                tensors = [f[field] for f in features if torch.is_tensor(f[field])]
                 if tensors:
-                    pad_value = -100 if key == 'labels' else self.tokenizer.pad_token_id
-                    batch[key] = self._pad_tensors(tensors, pad_value)
+                    pad_value = -100 if field == 'labels' else self.tokenizer.pad_token_id
+                    batch[field] = self._pad_sequence(tensors, pad_value)
         
-        # 텍스트 필드 처리
-        text_keys = ['target_text', 'question', 'problem', 'premise', 'hypothesis']
-        for key in text_keys:
-            if key in features[0]:
-                batch[key] = [f.get(key, '') for f in features]
+        # Process text fields
+        text_fields = ['target_text', 'question', 'problem', 'premise', 'hypothesis', 'context']
+        
+        for field in text_fields:
+            if field in features[0]:
+                batch[field] = [f.get(field, '') for f in features]
         
         return batch
     
-    def _pad_tensors(self, tensors: List[torch.Tensor], pad_value: int = 0) -> torch.Tensor:
-        max_length = max(t.size(-1) for t in tensors)
-        padded = []
+    def _pad_sequence(self, tensors: List[torch.Tensor], pad_value: int = 0) -> torch.Tensor:
+        """Pad tensor sequence to same length"""
+        if not tensors:
+            return torch.empty(0)
         
+        # Find max length
+        max_len = max(t.size(-1) for t in tensors)
+        max_len = min(max_len, self.max_length)  # Respect max_length
+        
+        padded = []
         for tensor in tensors:
-            if tensor.size(-1) < max_length:
-                padding = torch.full((max_length - tensor.size(-1),), pad_value, dtype=tensor.dtype)
+            current_len = tensor.size(-1)
+            
+            if current_len > max_len:
+                # Truncate if too long
+                padded_tensor = tensor[:max_len]
+            elif current_len < max_len:
+                # Pad if too short
+                padding_size = max_len - current_len
+                padding = torch.full((padding_size,), pad_value, dtype=tensor.dtype, device=tensor.device)
                 padded_tensor = torch.cat([tensor, padding])
             else:
-                padded_tensor = tensor[:max_length]
+                padded_tensor = tensor
+            
             padded.append(padded_tensor)
         
         return torch.stack(padded)
+    

@@ -1,50 +1,34 @@
 # main.py
-
 import torch
 import argparse
 import os
-from models.connection_transformer import ConnectionTransformer
-from models.baseline_transformer import BaselineTransformer
-from training.trainer import Trainer
-from dataset.tokenizer_utils import get_tokenizer_and_dataset
+import sys
+from pathlib import Path
 
-# Config imports
-import configs.logiqa_config as logiqa_cfg
-import configs.gsm8k_config as gsm8k_cfg
-import configs.strategyqa_config as strategyqa_cfg
-import configs.multinli_config as multinli_cfg
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", choices=["logiqa", "gsm8k", "strategyqa", "multinli"], required=True)
-    parser.add_argument("--model", choices=["connection", "baseline"], required=True)
-    parser.add_argument("--model_size", choices=["nano", "micro", "tiny", "base"], default="micro")
-    parser.add_argument("--output_dir", type=str, default="./outputs")
-    args = parser.parse_args()
-    
-    # 환경 설정
-    os.makedirs(args.output_dir, exist_ok=True)
-    
-    # Config 로드
+def get_config(dataset_name, model_size):
+    """Unified config loading"""
     config_map = {
-        "logiqa": logiqa_cfg.get_config,
-        "gsm8k": gsm8k_cfg.get_config,
-        "strategyqa": strategyqa_cfg.get_config,
-        "multinli": multinli_cfg.get_config
+        "strategyqa": "configs.strategyqa_config",
+        "logiqa": "configs.logiqa_config", 
+        "gsm8k": "configs.gsm8k_config",
+        "multinli": "configs.multinli_config"
     }
     
-    config = config_map[args.dataset](args.model_size)
-    config.update(output_dir=args.output_dir)
+    if dataset_name not in config_map:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
     
-    print(f"📋 {args.dataset} + {args.model} + {args.model_size}")
-    print(f"   d_model={config.d_model}, batch_size={config.batch_size}")
-    
-    # 데이터 로드
-    tokenizer, train_dataset, eval_dataset = get_tokenizer_and_dataset(args.dataset, config)
-    
-    # 모델 생성
-    if args.model == "connection":
-        model = ConnectionTransformer(
+    try:
+        module = __import__(config_map[dataset_name], fromlist=['get_config'])
+        return module.get_config(model_size)
+    except ImportError as e:
+        print(f"❌ Failed to import config for {dataset_name}: {e}")
+        sys.exit(1)
+
+def create_model(model_type, config):
+    """Unified model creation"""
+    if model_type == "connection":
+        from models.connection_transformer import ConnectionTransformer
+        return ConnectionTransformer(
             src_vocab_size=config.vocab_size,
             tgt_vocab_size=config.vocab_size,
             d_model=config.d_model,
@@ -55,29 +39,134 @@ def main():
             src_pad_token_id=config.pad_token_id,
             tgt_pad_token_id=config.pad_token_id,
             num_decoder_layers=config.num_decoder_layers,
-            num_heads=config.num_heads
+            num_heads=config.num_heads,
+            dropout=config.dropout
         )
-    else:
-        # 간단한 baseline 매칭
-        model = BaselineTransformer(
+    
+    elif model_type == "baseline":
+        from models.baseline_transformer import BaselineTransformer, calculate_matching_config_enc_dec
+        
+        # Calculate matching configuration
+        baseline_config = calculate_matching_config_enc_dec(config)
+        
+        return BaselineTransformer(
             src_vocab_size=config.vocab_size,
             tgt_vocab_size=config.vocab_size,
             d_model=config.d_model,
-            num_encoder_layers=4,
-            num_decoder_layers=config.num_decoder_layers,
-            ffn_multiplier=4,
+            num_encoder_layers=baseline_config['num_encoder_layers'],
+            num_decoder_layers=baseline_config['num_decoder_layers'],
+            num_heads=config.num_heads,
+            ffn_multiplier=baseline_config['ffn_multiplier'],
+            dropout=config.dropout,
             max_seq_len=config.max_seq_len,
             src_pad_token_id=config.pad_token_id,
             tgt_pad_token_id=config.pad_token_id
         )
     
-    # 훈련
-    trainer = Trainer(model, config, model_type=args.model)
-    trainer.set_tokenizer(tokenizer)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Train Connection Transformer")
+    parser.add_argument("--dataset", 
+                       choices=["strategyqa", "logiqa", "gsm8k", "multinli"], 
+                       required=True,
+                       help="Dataset to use")
+    parser.add_argument("--model", 
+                       choices=["connection", "baseline"], 
+                       required=True,
+                       help="Model type to train")
+    parser.add_argument("--model_size", 
+                       choices=["nano", "micro", "tiny", "small", "base"], 
+                       default="micro",
+                       help="Model size configuration")
+    parser.add_argument("--output_dir", 
+                       type=str, 
+                       default="./outputs",
+                       help="Output directory for results")
+    parser.add_argument("--resume_from", 
+                       type=str, 
+                       default=None,
+                       help="Path to checkpoint to resume from")
+    parser.add_argument("--dry_run", 
+                       action="store_true",
+                       help="Just verify setup without training")
     
-    best_accuracy = trainer.train(train_dataset, eval_dataset)
+    args = parser.parse_args()
     
-    print(f"✅ 완료! 최고 정확도: {best_accuracy:.4f}")
+    # Setup output directory
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"🚀 Connection Transformer Experiment")
+    print(f"   Dataset: {args.dataset}")
+    print(f"   Model: {args.model}")
+    print(f"   Size: {args.model_size}")
+    print(f"   Output: {output_dir}")
+    print("-" * 50)
+    
+    try:
+        # Load configuration
+        print("📋 Loading configuration...")
+        config = get_config(args.dataset, args.model_size)
+        config.update(output_dir=str(output_dir))
+        
+        print(f"✅ Config loaded:")
+        print(f"   d_model={config.d_model}")
+        print(f"   batch_size={config.batch_size}")
+        print(f"   learning_rate={config.learning_rate}")
+        print(f"   num_epochs={config.num_epochs}")
+        
+        if hasattr(config, 'num_slots'):
+            print(f"   num_slots={config.num_slots}")
+            print(f"   bilinear_rank={config.bilinear_rank}")
+        
+        # Load data
+        print("\n📦 Loading dataset...")
+        from dataset.tokenizer_utils import get_tokenizer_and_dataset
+        tokenizer, train_dataset, eval_dataset = get_tokenizer_and_dataset(args.dataset, config)
+        
+        print(f"✅ Dataset loaded:")
+        print(f"   Train: {len(train_dataset)} samples")
+        print(f"   Eval: {len(eval_dataset)} samples")
+        print(f"   Vocab size: {config.vocab_size:,}")
+        
+        # Create model
+        print(f"\n🏗️ Creating {args.model} model...")
+        model = create_model(args.model, config)
+        
+        # Count parameters
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"✅ Model created: {total_params:,} parameters")
+        
+        if args.dry_run:
+            print("\n🔍 Dry run completed successfully!")
+            return 0
+        
+        # Setup trainer
+        print(f"\n🎯 Setting up trainer...")
+        from training.trainer import Trainer
+        trainer = Trainer(model, config, model_type=args.model)
+        trainer.set_tokenizer(tokenizer)
+        
+        # Train
+        print(f"\n🚀 Starting training...")
+        best_accuracy = trainer.train(train_dataset, eval_dataset)
+        
+        print(f"\n✅ Training completed!")
+        print(f"   Best accuracy: {best_accuracy:.4f}")
+        print(f"   Results saved in: {output_dir}")
+        
+        return 0
+        
+    except KeyboardInterrupt:
+        print("\n⚠️ Training interrupted by user")
+        return 1
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
 
 if __name__ == "__main__":
-    main()
+    exit(main())
