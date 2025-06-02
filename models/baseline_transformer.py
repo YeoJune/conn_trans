@@ -218,6 +218,56 @@ class BaselineTransformer(nn.Module):
     def reasoning_cost_loss(self, actual_steps, target_steps=4, weight=0.001):
         """Dummy method for compatibility - no reasoning cost for baseline"""
         return torch.tensor(0.0, device=next(self.parameters()).device)
+    
+    def load_pretrained_weights(self, model_name="google-t5/t5-base"):
+        """T5 pre-trained weights 로딩 (embeddings + output projection)"""
+        try:
+            from transformers import T5Model
+            pretrained = T5Model.from_pretrained(model_name)
+            
+            # 1. Token embeddings
+            pretrained_embed = pretrained.shared.weight.data
+            current_vocab_size = self.src_token_embedding.weight.size(0)
+            pretrained_vocab_size = pretrained_embed.size(0)
+            
+            if current_vocab_size == pretrained_vocab_size:
+                self.src_token_embedding.weight.data = pretrained_embed.clone()
+                self.tgt_token_embedding.weight.data = pretrained_embed.clone()
+                print(f"✅ Token embeddings: {current_vocab_size} tokens")
+            else:
+                min_vocab_size = min(current_vocab_size, pretrained_vocab_size)
+                self.src_token_embedding.weight.data[:min_vocab_size] = pretrained_embed[:min_vocab_size].clone()
+                self.tgt_token_embedding.weight.data[:min_vocab_size] = pretrained_embed[:min_vocab_size].clone()
+                print(f"✅ Token embeddings: {min_vocab_size}/{current_vocab_size} tokens")
+            
+            # 2. Position embeddings (T5는 relative position이지만 일반적인 position embedding 생성)
+            max_pos = min(self.src_pos_embedding.weight.size(0), 512)  # T5 기본 길이
+            # T5 스타일의 position embedding 초기화 (learned positional encoding처럼)
+            pos_init = torch.randn(max_pos, self.d_model) * 0.02
+            self.src_pos_embedding.weight.data[:max_pos] = pos_init
+            self.tgt_pos_embedding.weight.data[:max_pos] = pos_init
+            print(f"✅ Position embeddings: {max_pos} positions")
+            
+            # 3. Output projection
+            if hasattr(pretrained, 'lm_head'):
+                pretrained_proj = pretrained.lm_head.weight.data
+                current_vocab_out = self.output_projection.weight.size(0)
+                pretrained_vocab_out = pretrained_proj.size(0)
+                
+                if current_vocab_out == pretrained_vocab_out:
+                    self.output_projection.weight.data = pretrained_proj.clone()
+                    print(f"✅ Output projection: {current_vocab_out} tokens")
+                else:
+                    min_vocab_out = min(current_vocab_out, pretrained_vocab_out)
+                    self.output_projection.weight.data[:min_vocab_out] = pretrained_proj[:min_vocab_out].clone()
+                    print(f"✅ Output projection: {min_vocab_out}/{current_vocab_out} tokens")
+            
+            print(f"🎯 Pre-trained initialization from {model_name} completed")
+            return True
+            
+        except Exception as e:
+            print(f"⚠️ Failed to load pre-trained weights: {e}")
+            return False
 
 def calculate_matching_config_enc_dec(config):
     """간단한 baseline 설정 계산"""
@@ -236,33 +286,3 @@ def calculate_matching_config_enc_dec(config):
         return {'num_encoder_layers': 4, 'num_decoder_layers': 4, 'ffn_multiplier': 4}
     else:
         return {'num_encoder_layers': 6, 'num_decoder_layers': 6, 'ffn_multiplier': 4}
-    
-    def load_pretrained_embeddings(self, model_name="google-t5/t5-base"):
-        """T5 pre-trained embeddings 로딩 (크기 안전 처리)"""
-        try:
-            from transformers import T5Model
-            pretrained = T5Model.from_pretrained(model_name)
-            pretrained_weight = pretrained.shared.weight.data
-            
-            # 현재 모델의 vocab_size
-            current_vocab_size = self.src_token_embedding.weight.size(0)
-            pretrained_vocab_size = pretrained_weight.size(0)
-            
-            print(f"🔍 Vocab sizes: current={current_vocab_size}, pretrained={pretrained_vocab_size}")
-            
-            if current_vocab_size == pretrained_vocab_size:
-                # 크기가 같으면 그대로 복사
-                self.src_token_embedding.weight.data = pretrained_weight.clone()
-                self.tgt_token_embedding.weight.data = pretrained_weight.clone()
-                print(f"✅ Loaded all embeddings from {model_name}")
-            else:
-                # 크기가 다르면 겹치는 부분만 복사
-                min_vocab_size = min(current_vocab_size, pretrained_vocab_size)
-                self.src_token_embedding.weight.data[:min_vocab_size] = pretrained_weight[:min_vocab_size].clone()
-                self.tgt_token_embedding.weight.data[:min_vocab_size] = pretrained_weight[:min_vocab_size].clone()
-                print(f"✅ Loaded {min_vocab_size}/{current_vocab_size} embeddings from {model_name}")
-            
-            return True
-        except Exception as e:
-            print(f"⚠️ Failed to load pre-trained embeddings: {e}")
-            return False

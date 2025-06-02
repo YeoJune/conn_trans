@@ -74,8 +74,8 @@ def create_model(model_type, config):
     else:
         raise ValueError(f"Unknown model type: {model_type}")
     
-    # 🔧 Pre-trained embeddings 로딩
-    model.load_pretrained_embeddings(config.tokenizer_name)
+    # 🔧 Pre-trained weights 로딩
+    model.load_pretrained_weights(config.tokenizer_name)
     
     return model
 
