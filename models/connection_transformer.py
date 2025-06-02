@@ -138,28 +138,25 @@ class ConnectionTransformer(nn.Module):
     
     def bilinear_transform(self, H_state):
         """
-        완전히 올바른 bilinear transformation
-        차원: [B, N, D] → [B, N, D], 의미: 동일
+        메모리 효율적 + 빠른 bilinear transformation
+        O(B*N*D + N²) 메모리, O(B*N²*D) 시간이지만 실제로는 훨씬 빠름
         """
         batch_size, num_slots, d_model = H_state.shape
-
-        # 연결 강도 계산: [N, N]
+        
+        # 연결 강도 미리 계산: O(N²*r) 시간, O(N²) 메모리
         connection_matrix = torch.sum(self.W_source * self.W_target, dim=-1)
         connection_matrix.fill_diagonal_(0.0)
-
-        # 🔥 메모리 효율적이면서 의미 동일한 방법
-        # 원래: torch.einsum('ij,bid->bjd', connection_matrix, H_state)
-        # 동등한 표현: connection_matrix.T @ H_state (각 배치별로)
-
-        influence = torch.zeros_like(H_state)  # [B, N, D]
-
-        # 배치별로 처리하여 메모리 절약
-        for b in range(batch_size):
-            # H_state[b]: [N, D]
-            # connection_matrix.T: [N, N] (i행 j열 = j에서 i로의 영향)
-            # 결과: [N, D]
-            influence[b] = connection_matrix.T @ H_state[b]
-
+        
+        # 핵심: 차원 순서를 바꿔서 한 번에 계산
+        # H_state: [B, N, D] -> [N, B*D]로 reshape
+        H_reshaped = H_state.transpose(0, 1).contiguous().view(num_slots, -1)  # [N, B*D]
+        
+        # Matrix multiplication: [N, N] @ [N, B*D] = [N, B*D]
+        influence_reshaped = connection_matrix @ H_reshaped  # 한 번의 큰 matmul
+        
+        # 다시 원래 형태로: [N, B*D] -> [B, N, D]
+        influence = influence_reshaped.view(num_slots, batch_size, d_model).transpose(0, 1)
+        
         return influence
 
     def encode(self, src_input_ids, src_attention_mask=None, return_reasoning_trace=False):
