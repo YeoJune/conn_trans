@@ -90,26 +90,26 @@ class BaseReasoningDataset(Dataset, ABC):
         src_inputs = self.tokenizer(
             item['input_text'],
             max_length=self.max_length,
-            padding='max_length',
+            padding=False,  # 🔥 padding은 collator에서
             truncation=True,
             return_tensors='pt'
         )
         
+        # Target tokenization (T5 방식)
         tgt_inputs = self.tokenizer(
             item['target_text'],
             max_length=self.answer_max_length,
-            padding='max_length', 
+            padding=False,  # 🔥 padding은 collator에서
             truncation=True,
             return_tensors='pt'
         )
         
-        # T5 스타일 decoder_input_ids 생성
-        decoder_input_ids = tgt_inputs.input_ids.squeeze().clone()
-        decoder_input_ids = self._shift_right_t5(decoder_input_ids)
+        # T5 방식 decoder_input_ids
+        decoder_input_ids = self._create_decoder_input_ids(tgt_inputs.input_ids.squeeze())
         
-        # Labels 생성
+        # Labels
         labels = tgt_inputs.input_ids.squeeze().clone()
-        labels[labels == self.tokenizer.pad_token_id] = -100
+        # -100 패딩은 collator에서
         
         return {
             'input_ids': src_inputs.input_ids.squeeze(),
@@ -119,6 +119,19 @@ class BaseReasoningDataset(Dataset, ABC):
             'labels': labels,
             'target_text': item['target_text']
         }
+
+    def _create_decoder_input_ids(self, target_ids):
+        """T5 방식: 시작 토큰으로 시작"""
+        if hasattr(self.tokenizer, 'decoder_start_token_id') and self.tokenizer.decoder_start_token_id is not None:
+            start_token = self.tokenizer.decoder_start_token_id
+        else:
+            start_token = self.tokenizer.pad_token_id
+        
+        decoder_input_ids = torch.cat([
+            torch.tensor([start_token]), 
+            target_ids[:-1]  # 마지막 토큰 제거
+        ])
+        return decoder_input_ids
 
     def _shift_right_t5(self, input_ids):
         """T5 방식 decoder input: 한 칸 오른쪽으로 shift"""
