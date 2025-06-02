@@ -316,7 +316,7 @@ class ConnectionTransformer(nn.Module):
             return logits
     
     def orthogonal_regularization_loss(self):
-        """간소화된 orthogonal regularization"""
+        """배치별로 나누어 처리하는 간소화된 orthogonal regularization"""
         device = self.W_source.device
         
         # 자기 연결 제외 마스크
@@ -324,15 +324,41 @@ class ConnectionTransformer(nn.Module):
         
         # W_source orthogonality (벡터 간 직교성)
         W_source_valid = self.W_source[~mask]  # [N*(N-1), r]
-        gram_source = W_source_valid @ W_source_valid.T
-        identity_source = torch.eye(W_source_valid.size(0), device=device)
-        source_loss = F.mse_loss(gram_source, identity_source)
         
-        # W_target orthogonality
+        # 배치로 나누어 gram 행렬 계산
+        chunk_size = 1000  # 청크 크기
+        total_valid = W_source_valid.size(0)
+        
+        source_losses = []
+        for i in range(0, total_valid, chunk_size):
+            end_i = min(i + chunk_size, total_valid)
+            chunk_source = W_source_valid[i:end_i]  # [chunk_size, r]
+            
+            gram_chunk = chunk_source @ W_source_valid.T  # [chunk_size, N*(N-1)]
+            identity_chunk = torch.zeros_like(gram_chunk)
+            identity_chunk[:, i:end_i] = torch.eye(end_i - i, device=device)
+            
+            chunk_loss = F.mse_loss(gram_chunk, identity_chunk)
+            source_losses.append(chunk_loss)
+        
+        source_loss = torch.stack(source_losses).mean()
+        
+        # W_target orthogonality (동일한 방식)
         W_target_valid = self.W_target[~mask]  # [N*(N-1), r]
-        gram_target = W_target_valid @ W_target_valid.T
-        identity_target = torch.eye(W_target_valid.size(0), device=device)
-        target_loss = F.mse_loss(gram_target, identity_target)
+        
+        target_losses = []
+        for i in range(0, total_valid, chunk_size):
+            end_i = min(i + chunk_size, total_valid)
+            chunk_target = W_target_valid[i:end_i]  # [chunk_size, r]
+            
+            gram_chunk = chunk_target @ W_target_valid.T  # [chunk_size, N*(N-1)]
+            identity_chunk = torch.zeros_like(gram_chunk)
+            identity_chunk[:, i:end_i] = torch.eye(end_i - i, device=device)
+            
+            chunk_loss = F.mse_loss(gram_chunk, identity_chunk)
+            target_losses.append(chunk_loss)
+        
+        target_loss = torch.stack(target_losses).mean()
         
         return (source_loss + target_loss) / 2
     
