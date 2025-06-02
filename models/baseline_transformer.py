@@ -238,16 +238,30 @@ def calculate_matching_config_enc_dec(config):
         return {'num_encoder_layers': 6, 'num_decoder_layers': 6, 'ffn_multiplier': 4}
     
     def load_pretrained_embeddings(self, model_name="google-t5/t5-base"):
-        """T5 pre-trained embeddings 로딩"""
+        """T5 pre-trained embeddings 로딩 (크기 안전 처리)"""
         try:
             from transformers import T5Model
             pretrained = T5Model.from_pretrained(model_name)
+            pretrained_weight = pretrained.shared.weight.data
             
-            # 토큰 임베딩 복사
-            self.src_token_embedding.weight.data = pretrained.shared.weight.data.clone()
-            self.tgt_token_embedding.weight.data = pretrained.shared.weight.data.clone()
+            # 현재 모델의 vocab_size
+            current_vocab_size = self.src_token_embedding.weight.size(0)
+            pretrained_vocab_size = pretrained_weight.size(0)
             
-            print(f"✅ Loaded pre-trained embeddings from {model_name}")
+            print(f"🔍 Vocab sizes: current={current_vocab_size}, pretrained={pretrained_vocab_size}")
+            
+            if current_vocab_size == pretrained_vocab_size:
+                # 크기가 같으면 그대로 복사
+                self.src_token_embedding.weight.data = pretrained_weight.clone()
+                self.tgt_token_embedding.weight.data = pretrained_weight.clone()
+                print(f"✅ Loaded all embeddings from {model_name}")
+            else:
+                # 크기가 다르면 겹치는 부분만 복사
+                min_vocab_size = min(current_vocab_size, pretrained_vocab_size)
+                self.src_token_embedding.weight.data[:min_vocab_size] = pretrained_weight[:min_vocab_size].clone()
+                self.tgt_token_embedding.weight.data[:min_vocab_size] = pretrained_weight[:min_vocab_size].clone()
+                print(f"✅ Loaded {min_vocab_size}/{current_vocab_size} embeddings from {model_name}")
+            
             return True
         except Exception as e:
             print(f"⚠️ Failed to load pre-trained embeddings: {e}")
