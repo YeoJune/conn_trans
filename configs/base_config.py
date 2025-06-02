@@ -69,6 +69,11 @@ class BaseConfig:
                 "d_model": 256, "num_slots": 64, "bilinear_rank": 16,
                 "max_reasoning_steps": 4, "num_decoder_layers": 6, "num_heads": 8,
                 "max_seq_len": 512, "batch_size": 16, "learning_rate": 3e-4
+            },
+            "large": {
+                "d_model": 512, "num_slots": 128, "bilinear_rank": 32,
+                "max_reasoning_steps": 5, "num_decoder_layers": 8, "num_heads": 16,
+                "max_seq_len": 1024, "batch_size": 32, "learning_rate": 4e-4
             }
         }
         
