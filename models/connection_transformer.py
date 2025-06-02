@@ -440,54 +440,54 @@ class ConnectionTransformer(nn.Module):
             }
 
         def _analyze_orthogonality_scalable(self):
-        """
-        스케일러블한 직교성 분석 (의미 보존)
-        """
-        device = self.W_source.device
-        mask = torch.eye(self.num_slots, device=device, dtype=torch.bool)
+            """
+            스케일러블한 직교성 분석 (의미 보존)
+            """
+            device = self.W_source.device
+            mask = torch.eye(self.num_slots, device=device, dtype=torch.bool)
 
-        # 단위벡터 조건 체크
-        unit_errors = []
-        for i in range(self.num_slots):
-            for j in range(self.num_slots):
-                if i != j:
-                    source_norm = torch.norm(self.W_source[i, j]).item()
-                    target_norm = torch.norm(self.W_target[i, j]).item()
-                    
-                    unit_errors.append(abs(source_norm - 1.0))
-                    unit_errors.append(abs(target_norm - 1.0))
+            # 단위벡터 조건 체크
+            unit_errors = []
+            for i in range(self.num_slots):
+                for j in range(self.num_slots):
+                    if i != j:
+                        source_norm = torch.norm(self.W_source[i, j]).item()
+                        target_norm = torch.norm(self.W_target[i, j]).item()
+                        
+                        unit_errors.append(abs(source_norm - 1.0))
+                        unit_errors.append(abs(target_norm - 1.0))
 
-        avg_unit_error = sum(unit_errors) / len(unit_errors) if unit_errors else 0.0
+            avg_unit_error = sum(unit_errors) / len(unit_errors) if unit_errors else 0.0
 
-        # 직교성 샘플링 체크 (큰 N에서)
-        if self.num_slots > 64:
-            sample_size = min(1000, self.num_slots * (self.num_slots - 1))
-            ortho_errors = []
-            
-            for _ in range(sample_size):
-                # 랜덤 쌍 선택
-                pairs = torch.randint(0, self.num_slots, (4,))
-                i1, j1, i2, j2 = pairs
+            # 직교성 샘플링 체크 (큰 N에서)
+            if self.num_slots > 64:
+                sample_size = min(1000, self.num_slots * (self.num_slots - 1))
+                ortho_errors = []
                 
-                if i1 != j1 and i2 != j2 and (i1 != i2 or j1 != j2):
-                    dot_s = torch.dot(self.W_source[i1, j1], self.W_source[i2, j2]).item()
-                    dot_t = torch.dot(self.W_target[i1, j1], self.W_target[i2, j2]).item()
+                for _ in range(sample_size):
+                    # 랜덤 쌍 선택
+                    pairs = torch.randint(0, self.num_slots, (4,))
+                    i1, j1, i2, j2 = pairs
                     
-                    ortho_errors.append(abs(dot_s))
-                    ortho_errors.append(abs(dot_t))
-            
-            avg_ortho_error = sum(ortho_errors) / len(ortho_errors) if ortho_errors else 0.0
-        else:
-            avg_ortho_error = 0.0  # 작은 N에서는 정확한 계산 필요
+                    if i1 != j1 and i2 != j2 and (i1 != i2 or j1 != j2):
+                        dot_s = torch.dot(self.W_source[i1, j1], self.W_source[i2, j2]).item()
+                        dot_t = torch.dot(self.W_target[i1, j1], self.W_target[i2, j2]).item()
+                        
+                        ortho_errors.append(abs(dot_s))
+                        ortho_errors.append(abs(dot_t))
+                
+                avg_ortho_error = sum(ortho_errors) / len(ortho_errors) if ortho_errors else 0.0
+            else:
+                avg_ortho_error = 0.0  # 작은 N에서는 정확한 계산 필요
 
-        total_error = avg_unit_error + avg_ortho_error
+            total_error = avg_unit_error + avg_ortho_error
 
-        return {
-            'orthogonality_error': total_error,
-            'orthogonality_quality': 1.0 / (1.0 + total_error),
-            'unit_vector_error': avg_unit_error,
-            'orthogonal_error': avg_ortho_error
-        }
+            return {
+                'orthogonality_error': total_error,
+                'orthogonality_quality': 1.0 / (1.0 + total_error),
+                'unit_vector_error': avg_unit_error,
+                'orthogonal_error': avg_ortho_error
+            }
 
     def _calculate_connection_entropy(self, connection_strengths):
         """연결 강도의 엔트로피 계산 (다양성 측정)"""
