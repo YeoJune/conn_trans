@@ -269,6 +269,11 @@ class Trainer:
     
     def train(self, train_dataset, eval_dataset):
         """주 훈련 루프"""
+        # Validation set 자동 처리
+        if eval_dataset is None:
+            print("📋 Auto-creating validation set from train data (10% split)")
+            train_dataset, eval_dataset = self._create_validation_split(train_dataset)
+            
         # 설정 저장
         self.result_manager.save_config(self.config)
         
@@ -362,3 +367,17 @@ class Trainer:
         )
         
         return best_accuracy
+    
+    def _create_validation_split(self, dataset, val_ratio=0.1):
+        """간단한 validation split"""
+        total = len(dataset)
+        val_size = int(total * val_ratio)
+        train_size = total - val_size
+        
+        from torch.utils.data import random_split
+        generator = torch.Generator().manual_seed(42)
+        train_subset, val_subset = random_split(
+            dataset, [train_size, val_size], generator=generator
+        )
+        
+        return train_subset, val_subset
