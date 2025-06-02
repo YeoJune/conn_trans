@@ -68,12 +68,13 @@ python main.py --dataset strategyqa --model connection --skip_analysis
 
 ### Model Sizes
 
-| Size  | d_model | num_slots | bilinear_rank | Use Case              |
-| ----- | ------- | --------- | ------------- | --------------------- |
-| micro | 128     | 32        | 8             | Small-medium datasets |
-| small | 192     | 48        | 12            | Medium datasets       |
-| base  | 256     | 64        | 16            | Large datasets        |
-| large | 512     | 128       | 32            | Research experiments  |
+| Size    | d_model | num_slots | bilinear_rank | Use Case              |
+| ------- | ------- | --------- | ------------- | --------------------- |
+| micro   | 64      | 16        | 4             | Quick experiments     |
+| x-small | 128     | 32        | 8             | Small-medium datasets |
+| small   | 192     | 48        | 12            | Medium datasets       |
+| base    | 256     | 64        | 16            | Large datasets        |
+| large   | 512     | 128       | 32            | Research experiments  |
 
 ## 🔧 Improved Project Structure
 
@@ -178,7 +179,7 @@ config = BaseConfig() \
 
 ```python
 # Available sizes with automatic parameter scaling
-sizes = ["micro", "small", "base", "large"]
+sizes = ["micro", "x-small", "small", "base", "large"]
 
 # Each size automatically configures:
 # - Model dimensions (d_model, num_slots, bilinear_rank)
@@ -233,51 +234,108 @@ After each training run, the system automatically:
    결과 위치: outputs/comparisons/20250602_1445_comparison
 ```
 
-## 💡 Usage Examples
+## 🎯 Automated Experiment Runner
 
-### Research Workflow
+### Quick Batch Experiments
 
 ```bash
-# 1. Quick verification
-python main.py --dataset strategyqa --model connection --model_size micro --dry_run
+# Make script executable
+chmod +x run_experiments.sh
 
-# 2. Run Connection Transformer
-python main.py --dataset strategyqa --model connection --model_size micro
+# Run all datasets with optimal sizes
+./run_experiments.sh
 
-# 3. Run Baseline for comparison
-python main.py --dataset strategyqa --model baseline --model_size micro
+# Single dataset with default size
+./run_experiments.sh strategyqa
 
-# 4. Check automatic analysis results
-ls outputs/comparisons/
-cat outputs/comparisons/*/summary_report.md
+# Single dataset with specific size
+./run_experiments.sh multinli base
+
+# All datasets with same size
+./run_experiments.sh all micro
 ```
+
+### Experiment Script Features
+
+- **Smart Defaults**: Automatically selects optimal model sizes per dataset
+- **Flexible Arguments**: Support for specific datasets and model sizes
+- **Error Resilience**: Continues other experiments if one fails
+- **Automatic Analysis**: Runs comprehensive comparison after all experiments
+- **Progress Tracking**: Clear status updates for each experiment
+
+### Default Model Sizes
+
+| Dataset    | Default Size | Reasoning                    |
+| ---------- | ------------ | ---------------------------- |
+| StrategyQA | micro        | Small dataset, quick tests   |
+| LogiQA     | small        | Medium complexity reasoning  |
+| GSM8K      | small        | Mathematical reasoning tasks |
+| MultiNLI   | base         | Large dataset, full capacity |
+
+### Sample Output
+
+```bash
+🚀 Connection Transformer Experiments
+=====================================
+📊 Dataset: all
+📏 Model Size: default
+
+🔍 Quick verification...
+✅ System ready!
+
+📊 Dataset: strategyqa (size: micro)
+--------------------------------
+🔄 Running: strategyqa - connection (micro)
+✅ Completed: strategyqa - connection (micro)
+
+🔄 Running: strategyqa - baseline (micro)
+✅ Completed: strategyqa - baseline (micro)
+
+📈 Running final analysis...
+============================
+🎉 Analysis Complete!
+📊 Total experiments: 8
+🏆 Best accuracy: 0.7250
+📁 Results: experiments_output/comparisons/20250602_1445_comparison
+```
+
+## 💡 Usage Examples
 
 ### Batch Experiments
 
 ```bash
-# Run multiple experiments for comprehensive comparison
-for dataset in strategyqa logiqa gsm8k; do
-    python main.py --dataset $dataset --model connection --model_size small
-    python main.py --dataset $dataset --model baseline --model_size small
-done
+# Quick comparison across all datasets
+./run_experiments.sh
 
-# Results automatically compared and analyzed
-ls outputs/comparisons/
+# Development workflow
+./run_experiments.sh strategyqa micro  # Quick test
+./run_experiments.sh logiqa small      # Medium test
+./run_experiments.sh multinli base     # Full test
+
+# Research experiments
+./run_experiments.sh all small         # Consistent comparison
+./run_experiments.sh all base          # Full-scale evaluation
 ```
 
-### Development and Debugging
+### Single Experiments
 
 ```bash
-# Quick test with minimal resources
+# Quick test (recommended first run)
 python main.py --dataset strategyqa --model connection --model_size micro --dry_run
 
-# Training with detailed logging
+# Small dataset training with automatic analysis
 python main.py --dataset strategyqa --model connection --model_size micro
 
-# Check real-time progress
-tail -f outputs/experiments/*/training_log.txt
+# Medium dataset
+python main.py --dataset logiqa --model connection --model_size small
 
-# Skip automatic analysis for faster iteration
+# Large dataset
+python main.py --dataset multinli --model connection --model_size base
+
+# Baseline comparison
+python main.py --dataset multinli --model baseline --model_size base
+
+# Skip automatic analysis (faster)
 python main.py --dataset strategyqa --model connection --skip_analysis
 ```
 
@@ -386,6 +444,39 @@ Epoch 2/3
    결과 위치: outputs/comparisons/20250602_1432_comparison
 ```
 
+### Development and Debugging
+
+```bash
+# Quick test with minimal resources
+python main.py --dataset strategyqa --model connection --model_size micro --dry_run
+
+# Training with detailed logging
+python main.py --dataset strategyqa --model connection --model_size micro
+
+# Check real-time progress
+tail -f outputs/experiments/*/training_log.txt
+
+# Skip automatic analysis for faster iteration
+python main.py --dataset strategyqa --model connection --skip_analysis
+```
+
+### Research Workflow
+
+```bash
+# 1. Quick system verification
+./run_experiments.sh strategyqa micro
+
+# 2. Comprehensive comparison
+./run_experiments.sh all
+
+# 3. Check results
+ls outputs/comparisons/
+cat outputs/comparisons/*/summary_report.md
+
+# 4. Custom experiments
+python main.py --dataset gsm8k --model connection --model_size base
+```
+
 ## 🚨 Troubleshooting
 
 ### Common Issues
@@ -394,28 +485,66 @@ Epoch 2/3
 
    ```bash
    # Use smaller model size
+   ./run_experiments.sh strategyqa micro
+   # Or run individual experiments
    python main.py --dataset strategyqa --model connection --model_size micro
    ```
 
-2. **Analysis Failures**
+2. **Script Permission Denied**
+
+   ```bash
+   # Make script executable
+   chmod +x run_experiments.sh
+   ```
+
+3. **Experiment Failures**
+
+   ```bash
+   # Run verification first
+   python main.py --dataset strategyqa --model connection --dry_run
+   # Check individual components
+   ./run_experiments.sh strategyqa micro
+   ```
+
+4. **Analysis Failures**
 
    ```bash
    # Skip automatic analysis and run manually
    python main.py --dataset strategyqa --model connection --skip_analysis
    ```
 
-3. **File Permission Issues**
+5. **File Permission Issues**
    ```bash
    # Check outputs directory permissions
    chmod -R 755 outputs/
+   rm -rf outputs/  # Clean start if needed
    ```
 
 ### Performance Tips
 
-- Start with `micro` model size for initial experiments
-- Use `--dry_run` to verify setup before training
-- Check `outputs/experiments/*/training_log.txt` for detailed progress
-- Use `--skip_analysis` for faster iteration during development
+- **Start small**: Use `micro` model size for initial experiments
+- **Use batch script**: `./run_experiments.sh` handles everything automatically
+- **Monitor progress**: Check `outputs/experiments/*/training_log.txt` for detailed progress
+- **Development mode**: Use `--skip_analysis` for faster iteration during development
+- **Memory management**: Kill other GPU processes before large experiments
+
+### Quick Diagnostics
+
+```bash
+# System check
+python main.py --dataset strategyqa --model connection --model_size micro --dry_run
+
+# Memory check
+nvidia-smi  # Check GPU memory
+
+# Batch experiment check
+./run_experiments.sh strategyqa micro  # Single dataset test
+
+# Output verification
+ls outputs/experiments/  # Check experiment files
+ls outputs/analysis/     # Check analysis results
+ls outputs/comparisons/  # Check comparison results
+```
 
 ## 📄 Citation
 
