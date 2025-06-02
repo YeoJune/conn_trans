@@ -390,3 +390,19 @@ class ConnectionTransformer(nn.Module):
             actual_steps = torch.tensor(actual_steps, dtype=torch.float32, device=next(self.parameters()).device)
         target = torch.full_like(actual_steps, target_steps, dtype=torch.float32)
         return weight * F.mse_loss(actual_steps.float(), target)
+
+    def load_pretrained_embeddings(self, model_name="google-t5/t5-base"):
+        """T5 pre-trained embeddings 로딩"""
+        try:
+            from transformers import T5Model
+            pretrained = T5Model.from_pretrained(model_name)
+            
+            # 토큰 임베딩 복사
+            self.src_token_embedding.weight.data = pretrained.shared.weight.data.clone()
+            self.tgt_token_embedding.weight.data = pretrained.shared.weight.data.clone()
+            
+            print(f"✅ Loaded pre-trained embeddings from {model_name}")
+            return True
+        except Exception as e:
+            print(f"⚠️ Failed to load pre-trained embeddings: {e}")
+            return False

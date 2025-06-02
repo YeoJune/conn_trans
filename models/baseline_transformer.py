@@ -236,3 +236,19 @@ def calculate_matching_config_enc_dec(config):
         return {'num_encoder_layers': 4, 'num_decoder_layers': 4, 'ffn_multiplier': 4}
     else:
         return {'num_encoder_layers': 6, 'num_decoder_layers': 6, 'ffn_multiplier': 4}
+    
+    def load_pretrained_embeddings(self, model_name="google-t5/t5-base"):
+        """T5 pre-trained embeddings 로딩"""
+        try:
+            from transformers import T5Model
+            pretrained = T5Model.from_pretrained(model_name)
+            
+            # 토큰 임베딩 복사
+            self.src_token_embedding.weight.data = pretrained.shared.weight.data.clone()
+            self.tgt_token_embedding.weight.data = pretrained.shared.weight.data.clone()
+            
+            print(f"✅ Loaded pre-trained embeddings from {model_name}")
+            return True
+        except Exception as e:
+            print(f"⚠️ Failed to load pre-trained embeddings: {e}")
+            return False

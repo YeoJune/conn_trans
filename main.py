@@ -38,7 +38,7 @@ def create_model(model_type, config):
     """통합 모델 생성"""
     if model_type == "connection":
         from models.connection_transformer import ConnectionTransformer
-        return ConnectionTransformer(
+        model = ConnectionTransformer(
             src_vocab_size=config.vocab_size,
             tgt_vocab_size=config.vocab_size,
             d_model=config.d_model,
@@ -52,14 +52,13 @@ def create_model(model_type, config):
             num_heads=config.num_heads,
             dropout=config.dropout
         )
-    
+        
     elif model_type == "baseline":
         from models.baseline_transformer import BaselineTransformer, calculate_matching_config_enc_dec
         
-        # 매칭 설정 계산
         baseline_config = calculate_matching_config_enc_dec(config)
         
-        return BaselineTransformer(
+        model = BaselineTransformer(
             src_vocab_size=config.vocab_size,
             tgt_vocab_size=config.vocab_size,
             d_model=config.d_model,
@@ -72,9 +71,13 @@ def create_model(model_type, config):
             src_pad_token_id=config.pad_token_id,
             tgt_pad_token_id=config.pad_token_id
         )
-    
     else:
         raise ValueError(f"Unknown model type: {model_type}")
+    
+    # 🔧 Pre-trained embeddings 로딩
+    model.load_pretrained_embeddings(config.tokenizer_name)
+    
+    return model
 
 def run_automatic_analysis(output_dir):
     """훈련 완료 후 자동 비교 분석 실행"""
