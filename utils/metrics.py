@@ -18,7 +18,7 @@ def normalize_answer(s: str) -> str:
     return ' '.join(s.split())
 
 def extract_final_answer(text: str, dataset_type: Optional[str] = None) -> str:
-    """T5 답변에서 최종 답 추출 - 더 정확하게"""
+    """T5 답변에서 최종 답 추출 - 새 데이터셋 지원"""
     if not text:
         return ""
     
@@ -115,11 +115,44 @@ def extract_final_answer(text: str, dataset_type: Optional[str] = None) -> str:
         
         return "neutral"  # 기본값
     
+    elif dataset_type == "eli5":
+        # ELI5 - 긴 설명 생성 (첫 문장 추출)
+        # 문장 단위로 분할하여 첫 문장 반환
+        sentences = re.split(r'[.!?]+', text)
+        first_sentence = sentences[0].strip() if sentences else text.strip()
+        
+        # 너무 짧으면 전체 텍스트의 처음 일부 반환
+        if len(first_sentence.split()) < 3:
+            words = text.split()[:20]  # 처음 20 단어
+            return ' '.join(words)
+        
+        return first_sentence
+    
+    elif dataset_type == "commongen":
+        # CommonGen - 개념 연결 문장 (전체 텍스트 반환, 단 적절히 정리)
+        # 불필요한 앞뒤 공백 제거 및 연속 공백 정리
+        cleaned = ' '.join(text.split())
+        
+        # 너무 길면 첫 문장만
+        sentences = re.split(r'[.!?]+', cleaned)
+        if sentences and len(sentences[0].split()) <= 30:
+            return sentences[0].strip()
+        
+        # 첫 문장이 너무 길거나 없으면 처음 30 단어만
+        words = cleaned.split()[:30]
+        result = ' '.join(words)
+        
+        # 문장이 완성되지 않았으면 마침표 추가
+        if result and not result.endswith(('.', '!', '?')):
+            result += '.'
+        
+        return result
+    
     # 알 수 없는 데이터셋 타입인 경우 첫 단어 반환
     return first_word
 
 def exact_match_score(prediction: str, ground_truth: str, dataset_type: Optional[str] = None) -> bool:
-    """정확한 일치 여부 - 더 엄격하게"""
+    """정확한 일치 여부 - 새 데이터셋 지원"""
     try:
         pred = extract_final_answer(prediction, dataset_type)
         true = extract_final_answer(ground_truth, dataset_type)
@@ -137,6 +170,10 @@ def exact_match_score(prediction: str, ground_truth: str, dataset_type: Optional
                 # 숫자 변환 실패 시 문자열 비교
                 pass
         
+        # ELI5와 CommonGen은 의미적 유사성을 고려한 평가
+        elif dataset_type in ["eli5", "commongen"]:
+            return calculate_semantic_similarity(pred_norm, true_norm)
+        
         # 기본적으로 정규화된 문자열 비교
         return pred_norm == true_norm
         
@@ -145,10 +182,30 @@ def exact_match_score(prediction: str, ground_truth: str, dataset_type: Optional
         logging.debug(f"Exact match error: {e}")
         return False
 
+def calculate_semantic_similarity(pred: str, target: str) -> bool:
+    """ELI5, CommonGen용 의미적 유사성 계산"""
+    if not pred or not target:
+        return False
+    
+    # 토큰 기반 유사성 (Jaccard similarity)
+    pred_tokens = set(pred.split())
+    target_tokens = set(target.split())
+    
+    if not pred_tokens or not target_tokens:
+        return False
+    
+    intersection = len(pred_tokens & target_tokens)
+    union = len(pred_tokens | target_tokens)
+    
+    jaccard_similarity = intersection / union if union > 0 else 0.0
+    
+    # 30% 이상 유사하면 정답으로 간주 (생성 태스크는 관대하게)
+    return jaccard_similarity >= 0.3
+
 def calculate_accuracy(predictions: List[str], targets: List[str], 
                       dataset_type: Optional[str] = None, 
                       verbose: bool = True) -> float:
-    """정확도 계산 - 로깅 개선"""
+    """정확도 계산 - 새 데이터셋 지원"""
     if not predictions or not targets:
         return 0.0
     
@@ -178,11 +235,15 @@ def calculate_accuracy(predictions: List[str], targets: List[str],
     
     if verbose:
         print(f"🎯 Accuracy: {correct_count}/{total_count} = {accuracy:.4f} (type: {dataset_type or 'unknown'})")
+        
+        # 새 데이터셋의 경우 평가 방식 설명
+        if dataset_type in ["eli5", "commongen"]:
+            print(f"   📝 Note: Using semantic similarity (30%+ token overlap) for {dataset_type}")
     
     return accuracy
 
 def detect_dataset_type(targets: List[str]) -> Optional[str]:
-    """타겟으로부터 데이터셋 타입 자동 감지 - 더 정확하게"""
+    """타겟으로부터 데이터셋 타입 자동 감지 - 새 데이터셋 지원"""
     if not targets:
         return None
     
@@ -195,11 +256,14 @@ def detect_dataset_type(targets: List[str]) -> Optional[str]:
         'strategyqa': 0,
         'gsm8k': 0, 
         'logiqa': 0,
-        'multinli': 0
+        'multinli': 0,
+        'eli5': 0,
+        'commongen': 0
     }
     
     for target in sample:
         target_str = str(target).lower().strip()
+        word_count = len(target_str.split())
         
         # StrategyQA: Yes/No 답변
         if target_str in ['yes', 'no', 'true', 'false', '1', '0']:
@@ -216,19 +280,35 @@ def detect_dataset_type(targets: List[str]) -> Optional[str]:
         # MultiNLI: entailment, neutral, contradiction
         elif target_str in ['entailment', 'neutral', 'contradiction']:
             counters['multinli'] += 1
+        
+        # ELI5: 긴 설명 (보통 50+ 단어)
+        elif word_count >= 20 and any(word in target_str for word in ['because', 'when', 'how', 'why', 'what', 'explanation']):
+            counters['eli5'] += 1
+        
+        # CommonGen: 중간 길이 문장 (5-30 단어, 완전한 문장)
+        elif 5 <= word_count <= 30 and target_str.endswith('.'):
+            counters['commongen'] += 1
     
-    # 가장 많이 매칭된 타입 반환 (50% 이상 매칭 시)
-    threshold = sample_size * 0.5
+    # 가장 많이 매칭된 타입 반환 (40% 이상 매칭 시)
+    threshold = sample_size * 0.4  # 새 데이터셋은 패턴이 덜 명확할 수 있어서 임계값 낮춤
     
     for dataset_type, count in counters.items():
         if count >= threshold:
             return dataset_type
     
+    # 특별 케이스: 평균 길이로 추가 판단
+    avg_length = sum(len(str(target).split()) for target in sample) / len(sample)
+    
+    if avg_length >= 30:
+        return 'eli5'
+    elif 10 <= avg_length < 30:
+        return 'commongen'
+    
     return None
 
 def get_accuracy_breakdown(predictions: List[str], targets: List[str], 
                           dataset_type: Optional[str] = None) -> dict:
-    """정확도 세부 분석 정보 반환"""
+    """정확도 세부 분석 정보 반환 - 새 데이터셋 지원"""
     if not predictions or not targets:
         return {'accuracy': 0.0, 'correct': 0, 'total': 0, 'details': []}
     
@@ -250,13 +330,28 @@ def get_accuracy_breakdown(predictions: List[str], targets: List[str],
         if is_correct:
             correct_count += 1
             
+        # 새 데이터셋의 경우 추가 정보
+        extra_info = {}
+        if dataset_type in ["eli5", "commongen"]:
+            pred_norm = normalize_answer(extract_final_answer(pred, dataset_type))
+            target_norm = normalize_answer(extract_final_answer(target, dataset_type))
+            
+            if pred_norm and target_norm:
+                pred_tokens = set(pred_norm.split())
+                target_tokens = set(target_norm.split())
+                intersection = len(pred_tokens & target_tokens)
+                union = len(pred_tokens | target_tokens)
+                similarity = intersection / union if union > 0 else 0.0
+                extra_info['token_similarity'] = similarity
+            
         details.append({
             'index': i,
             'prediction': pred,
             'target': target,
             'correct': is_correct,
             'extracted_pred': extract_final_answer(pred, dataset_type),
-            'extracted_target': extract_final_answer(target, dataset_type)
+            'extracted_target': extract_final_answer(target, dataset_type),
+            **extra_info
         })
     
     return {
