@@ -8,13 +8,37 @@ class LogiQADataset(BaseReasoningDataset):
         return "LogiQA"
     
     def _load_raw_data(self):
-        # Try multiple sources
+        # Try multiple sources with proper split handling
         sources = ["lucasmccabe/logiqa", "logiqa"]
         
         for source in sources:
             try:
-                return load_dataset(source, split=self.split)
-            except Exception:
+                # 먼저 전체 데이터셋 정보 확인
+                dataset_info = load_dataset(source)
+                print(f"🔍 Available splits in {source}: {list(dataset_info.keys())}")
+                
+                # 요청된 split이 존재하는지 확인
+                if self.split in dataset_info:
+                    dataset = load_dataset(source, split=self.split)
+                    print(f"✅ Loaded {source} {self.split}: {len(dataset)} examples")
+                    return dataset
+                else:
+                    # split이 없으면 train을 사용하고 수동으로 분할
+                    print(f"⚠️ {self.split} not found in {source}, using train and manual split")
+                    full_dataset = load_dataset(source, split="train")
+                    
+                    # 수동 분할 (80% train, 20% test)
+                    if self.split == "train":
+                        split_dataset = full_dataset.train_test_split(test_size=0.2, seed=42)
+                        return split_dataset["train"]
+                    elif self.split in ["test", "validation"]:
+                        split_dataset = full_dataset.train_test_split(test_size=0.2, seed=42)
+                        return split_dataset["test"]
+                    else:
+                        return full_dataset
+                        
+            except Exception as e:
+                print(f"❌ Failed to load {source}: {e}")
                 continue
         
         raise RuntimeError("Failed to load LogiQA from any source")
@@ -84,3 +108,31 @@ class LogiQADataset(BaseReasoningDataset):
             return False
             
         return True
+    
+    def verify_split_integrity(self):
+        """데이터 분할 무결성 검증"""
+        print(f"\n🔍 LogiQA {self.split} Split Verification")
+        print(f"📊 Total samples: {len(self.data)}")
+        
+        # 정답 분포 확인
+        answers = []
+        for i in range(min(100, len(self.data))):
+            try:
+                item = self.__getitem__(i)
+                answers.append(item['target_text'])
+            except Exception as e:
+                print(f"❌ Error in item {i}: {e}")
+        
+        from collections import Counter
+        answer_dist = Counter(answers)
+        print(f"🎯 Answer distribution (first 100): {answer_dist}")
+        
+        # 분포가 너무 편향되어 있으면 경고
+        if len(answer_dist) == 1:
+            print("🚨 WARNING: All answers are the same! This suggests a data loading error.")
+        elif max(answer_dist.values()) > 80:  # 80% 이상이 같은 답
+            print("⚠️ WARNING: Answer distribution is highly skewed.")
+        else:
+            print("✅ Answer distribution looks reasonable.")
+        
+        return answer_dist
