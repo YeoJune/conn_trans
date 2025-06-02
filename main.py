@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 def get_config(dataset_name, model_size):
-    """Unified config loading"""
+    """통합 설정 로딩"""
     config_map = {
         "strategyqa": "configs.strategyqa_config",
         "logiqa": "configs.logiqa_config", 
@@ -19,13 +19,19 @@ def get_config(dataset_name, model_size):
     
     try:
         module = __import__(config_map[dataset_name], fromlist=['get_config'])
-        return module.get_config(model_size)
+        config = module.get_config(model_size)
+        
+        # 필수 필드 추가
+        config.dataset_name = dataset_name
+        config.model_size = model_size
+        
+        return config
     except ImportError as e:
         print(f"❌ Failed to import config for {dataset_name}: {e}")
         sys.exit(1)
 
 def create_model(model_type, config):
-    """Unified model creation"""
+    """통합 모델 생성"""
     if model_type == "connection":
         from models.connection_transformer import ConnectionTransformer
         return ConnectionTransformer(
@@ -46,7 +52,7 @@ def create_model(model_type, config):
     elif model_type == "baseline":
         from models.baseline_transformer import BaselineTransformer, calculate_matching_config_enc_dec
         
-        # Calculate matching configuration
+        # 매칭 설정 계산
         baseline_config = calculate_matching_config_enc_dec(config)
         
         return BaselineTransformer(
@@ -66,6 +72,30 @@ def create_model(model_type, config):
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
+def run_automatic_analysis(output_dir):
+    """훈련 완료 후 자동 비교 분석 실행"""
+    try:
+        from utils.comparison_analyzer import ComparisonAnalyzer
+        
+        print(f"\n🔍 자동 비교 분석 시작...")
+        analyzer = ComparisonAnalyzer(output_dir)
+        success = analyzer.analyze_all_experiments()
+        
+        if success:
+            summary = analyzer.get_comparison_summary()
+            print(f"\n📊 비교 분석 완료!")
+            print(f"   총 실험: {summary['total_experiments']}개")
+            print(f"   최고 성능: {summary['best_accuracy']:.4f}")
+            print(f"   결과 위치: {summary['comparison_dir']}")
+            return True
+        else:
+            print(f"⚠️ 비교 분석 스킵 (실험 부족)")
+            return False
+            
+    except Exception as e:
+        print(f"⚠️ 자동 분석 오류: {str(e)[:50]}...")
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description="Train Connection Transformer")
     parser.add_argument("--dataset", 
@@ -77,8 +107,8 @@ def main():
                        required=True,
                        help="Model type to train")
     parser.add_argument("--model_size", 
-                       choices=["x-small", "small", "base", "large"], 
-                       default="small",
+                       choices=["nano", "micro", "tiny", "small", "base"], 
+                       default="micro",
                        help="Model size configuration")
     parser.add_argument("--output_dir", 
                        type=str, 
@@ -91,10 +121,13 @@ def main():
     parser.add_argument("--dry_run", 
                        action="store_true",
                        help="Just verify setup without training")
+    parser.add_argument("--skip_analysis", 
+                       action="store_true",
+                       help="Skip automatic comparison analysis")
     
     args = parser.parse_args()
     
-    # Setup output directory
+    # 출력 디렉토리 설정
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -106,10 +139,10 @@ def main():
     print("-" * 50)
     
     try:
-        # Load configuration
+        # 설정 로드
         print("📋 Loading configuration...")
         config = get_config(args.dataset, args.model_size)
-        config.update(output_dir=str(output_dir))
+        config.output_dir = str(output_dir)
         
         print(f"✅ Config loaded:")
         print(f"   d_model={config.d_model}")
@@ -121,7 +154,7 @@ def main():
             print(f"   num_slots={config.num_slots}")
             print(f"   bilinear_rank={config.bilinear_rank}")
         
-        # Load data
+        # 데이터 로드
         print("\n📦 Loading dataset...")
         from dataset.tokenizer_utils import get_tokenizer_and_dataset
         tokenizer, train_dataset, eval_dataset = get_tokenizer_and_dataset(args.dataset, config)
@@ -131,11 +164,11 @@ def main():
         print(f"   Eval: {len(eval_dataset)} samples")
         print(f"   Vocab size: {config.vocab_size:,}")
         
-        # Create model
+        # 모델 생성
         print(f"\n🏗️ Creating {args.model} model...")
         model = create_model(args.model, config)
         
-        # Count parameters
+        # 파라미터 카운트
         total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"✅ Model created: {total_params:,} parameters")
         
@@ -143,19 +176,23 @@ def main():
             print("\n🔍 Dry run completed successfully!")
             return 0
         
-        # Setup trainer
+        # 트레이너 설정
         print(f"\n🎯 Setting up trainer...")
         from training.trainer import Trainer
         trainer = Trainer(model, config, model_type=args.model)
         trainer.set_tokenizer(tokenizer)
         
-        # Train
+        # 훈련 시작
         print(f"\n🚀 Starting training...")
         best_accuracy = trainer.train(train_dataset, eval_dataset)
         
         print(f"\n✅ Training completed!")
         print(f"   Best accuracy: {best_accuracy:.4f}")
         print(f"   Results saved in: {output_dir}")
+        
+        # 자동 비교 분석 실행
+        if not args.skip_analysis:
+            run_automatic_analysis(output_dir)
         
         return 0
         

@@ -6,13 +6,12 @@ from torch.utils.data import DataLoader
 from transformers import get_linear_schedule_with_warmup
 from .data_collator import T5DataCollator
 from utils.metrics import calculate_accuracy
+from utils.result_manager import ResultManager
 import time
-import os
-import json
 from contextlib import nullcontext
 
 class Trainer:
-    """Simplified and robust trainer for Connection Transformer"""
+    """간소화되고 체계적인 Connection Transformer 훈련기"""
     
     def __init__(self, model, config, model_type="connection"):
         self.model = model
@@ -21,22 +20,22 @@ class Trainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = None
         
-        # Setup model and precision
+        # 결과 관리자 설정
+        self.result_manager = ResultManager(
+            base_dir=getattr(config, 'output_dir', './outputs'),
+            model_type=model_type,
+            dataset=config.dataset_name,
+            model_size=getattr(config, 'model_size', 'unknown')
+        )
+        
+        # 모델 및 정밀도 설정
         self._setup_model()
         self._setup_precision()
-        
-        # Training state
-        self.metrics = {
-            'train_losses': [],
-            'eval_losses': [],
-            'eval_accuracies': [],
-            'reasoning_steps': []
-        }
         
         print(f"🚀 Trainer: {model_type} | {self.device} | {self.precision_str}")
     
     def _setup_model(self):
-        """Setup model on device with gradient checkpointing"""
+        """모델을 디바이스로 이동 및 그래디언트 체크포인팅 설정"""
         self.model.to(self.device)
         
         if hasattr(self.config, 'gradient_checkpointing') and self.config.gradient_checkpointing:
@@ -44,7 +43,7 @@ class Trainer:
                 self.model.gradient_checkpointing_enable()
     
     def _setup_precision(self):
-        """Setup mixed precision training"""
+        """혼합 정밀도 훈련 설정"""
         self.use_bf16 = (
             getattr(self.config, 'bf16', True) and 
             torch.cuda.is_available() and 
@@ -59,7 +58,7 @@ class Trainer:
         self.scaler = torch.cuda.amp.GradScaler() if self.use_fp16 else None
         self.precision_str = 'bf16' if self.use_bf16 else 'fp16' if self.use_fp16 else 'fp32'
         
-        # Autocast context
+        # Autocast 컨텍스트
         if self.use_bf16:
             self.autocast_ctx = torch.amp.autocast('cuda', dtype=torch.bfloat16)
         elif self.use_fp16:
@@ -68,13 +67,13 @@ class Trainer:
             self.autocast_ctx = nullcontext()
     
     def set_tokenizer(self, tokenizer):
-        """Set tokenizer for the trainer"""
+        """토크나이저 설정"""
         self.tokenizer = tokenizer
         if hasattr(self.model, 'pad_token_id'):
             self.model.pad_token_id = tokenizer.pad_token_id
     
     def _setup_optimizer(self, train_loader):
-        """Setup optimizer and scheduler"""
+        """옵티마이저 및 스케줄러 설정"""
         self.optimizer = optim.AdamW(
             self.model.parameters(),
             lr=self.config.learning_rate,
@@ -89,7 +88,7 @@ class Trainer:
         )
     
     def _extract_batch_tensors(self, batch):
-        """Extract and move batch tensors to device"""
+        """배치 텐서 추출 및 디바이스 이동"""
         return {
             'src_input_ids': batch['input_ids'].to(self.device),
             'src_attention_mask': batch['attention_mask'].to(self.device),
@@ -99,10 +98,9 @@ class Trainer:
         }
     
     def _forward_pass(self, tensors, return_reasoning=False):
-        """Single forward pass with autocast"""
+        """autocast를 사용한 순전파"""
         with self.autocast_ctx:
             if return_reasoning and hasattr(self.model, 'forward'):
-                # Try to get reasoning info for Connection Transformer
                 try:
                     output = self.model(
                         tensors['src_input_ids'], 
@@ -117,7 +115,7 @@ class Trainer:
                 except:
                     pass
             
-            # Standard forward pass
+            # 표준 순전파
             logits = self.model(
                 tensors['src_input_ids'], 
                 tensors['tgt_input_ids'],
@@ -127,8 +125,7 @@ class Trainer:
             return logits, None
     
     def _calculate_loss(self, logits, labels):
-        """Calculate total loss including regularization"""
-        # Cross-entropy loss
+        """정규화를 포함한 총 손실 계산"""
         loss_fct = nn.CrossEntropyLoss(
             ignore_index=-100,
             label_smoothing=getattr(self.config, 'label_smoothing', 0.1)
@@ -138,7 +135,7 @@ class Trainer:
         flat_labels = labels.view(-1)
         loss = loss_fct(flat_logits, flat_labels)
         
-        # Add regularization for Connection Transformer
+        # Connection Transformer 정규화 추가
         if (self.model_type == "connection" and 
             hasattr(self.model, 'orthogonal_regularization_loss')):
             orth_loss = self.model.orthogonal_regularization_loss()
@@ -148,14 +145,14 @@ class Trainer:
         return loss
     
     def _backward_pass(self, loss):
-        """Backward pass with gradient scaling"""
+        """그래디언트 스케일링을 사용한 역전파"""
         if self.scaler:
             self.scaler.scale(loss).backward()
         else:
             loss.backward()
     
     def _optimizer_step(self):
-        """Optimizer step with gradient clipping"""
+        """그래디언트 클리핑을 사용한 옵티마이저 스텝"""
         if self.scaler:
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
@@ -169,51 +166,58 @@ class Trainer:
         self.optimizer.zero_grad()
     
     def train_epoch(self, train_loader, epoch):
-        """Train single epoch"""
+        """단일 에포크 훈련"""
         self.model.train()
         total_loss = 0.0
         num_batches = 0
+        reasoning_steps_epoch = []
         log_every = getattr(self.config, 'log_every', 50)
         
         for batch_idx, batch in enumerate(train_loader):
             try:
-                # Extract tensors
+                # 텐서 추출
                 tensors = self._extract_batch_tensors(batch)
                 
-                # Forward pass
+                # 순전파
                 logits, reasoning_info = self._forward_pass(tensors, return_reasoning=True)
                 loss = self._calculate_loss(logits, tensors['labels'])
                 
-                # Backward pass
+                # 역전파
                 self._backward_pass(loss)
                 self._optimizer_step()
                 
-                # Track metrics
+                # 메트릭 추적
                 total_loss += loss.item()
                 num_batches += 1
                 
-                # Track reasoning steps for Connection Transformer
+                # 추론 단계 추적 (Connection Transformer)
                 if reasoning_info and 'actual_steps' in reasoning_info:
-                    self.metrics['reasoning_steps'].append(reasoning_info['actual_steps'])
+                    reasoning_steps_epoch.append(reasoning_info['actual_steps'])
                 
-                # Logging
+                # 로깅
                 if batch_idx % log_every == 0:
                     lr = self.scheduler.get_last_lr()[0]
-                    print(f"  Epoch {epoch} [{batch_idx:4d}/{len(train_loader)}] "
-                          f"Loss: {loss.item():.4f} LR: {lr:.2e}")
+                    msg = f"  Epoch {epoch} [{batch_idx:4d}/{len(train_loader)}] Loss: {loss.item():.4f} LR: {lr:.2e}"
+                    print(msg)
+                    self.result_manager.log_training(msg)
                 
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
-                    print(f"🚨 OOM at batch {batch_idx}, skipping...")
+                    error_msg = f"🚨 OOM at batch {batch_idx}, skipping..."
+                    print(error_msg)
+                    self.result_manager.log_training(error_msg)
                     torch.cuda.empty_cache()
                     continue
                 else:
                     raise e
         
-        return total_loss / max(num_batches, 1)
+        avg_loss = total_loss / max(num_batches, 1)
+        avg_reasoning_steps = sum(reasoning_steps_epoch) / len(reasoning_steps_epoch) if reasoning_steps_epoch else None
+        
+        return avg_loss, avg_reasoning_steps
     
     def evaluate(self, eval_loader):
-        """Evaluate model"""
+        """모델 평가"""
         self.model.eval()
         total_loss = 0.0
         predictions = []
@@ -222,16 +226,16 @@ class Trainer:
         with torch.no_grad():
             for batch in eval_loader:
                 try:
-                    # Extract tensors
+                    # 텐서 추출
                     tensors = self._extract_batch_tensors(batch)
                     
-                    # Forward pass
+                    # 순전파
                     logits, _ = self._forward_pass(tensors)
                     loss = self._calculate_loss(logits, tensors['labels'])
                     
                     total_loss += loss.item()
                     
-                    # Generate predictions (sample first 4 items)
+                    # 예측 생성 (처음 4개 샘플만)
                     predicted_ids = torch.argmax(logits, dim=-1)
                     batch_size = min(logits.size(0), 4)
                     
@@ -253,8 +257,11 @@ class Trainer:
         return avg_loss, accuracy, predictions[:5], targets[:5]
     
     def train(self, train_dataset, eval_dataset):
-        """Main training loop with visualization"""
-        # Setup data loaders
+        """주 훈련 루프"""
+        # 설정 저장
+        self.result_manager.save_config(self.config)
+        
+        # 데이터 로더 설정
         data_collator = T5DataCollator(self.tokenizer, max_length=self.config.max_seq_len)
         
         train_loader = DataLoader(
@@ -275,230 +282,72 @@ class Trainer:
             pin_memory=torch.cuda.is_available()
         )
         
-        # Setup optimizer
+        # 옵티마이저 설정
         self._setup_optimizer(train_loader)
         
-        print(f"📊 Train: {len(train_loader)} batches | Eval: {len(eval_loader)} batches")
-        print(f"🚀 Training {self.config.num_epochs} epochs\n" + "="*50)
+        info_msg = f"📊 Train: {len(train_loader)} batches | Eval: {len(eval_loader)} batches"
+        start_msg = f"🚀 Training {self.config.num_epochs} epochs"
+        
+        print(info_msg)
+        print(start_msg + "\n" + "="*50)
+        self.result_manager.log_training(info_msg)
+        self.result_manager.log_training(start_msg)
         
         best_accuracy = 0.0
+        final_predictions = []
+        final_targets = []
         
         for epoch in range(self.config.num_epochs):
-            # Train
-            train_loss = self.train_epoch(train_loader, epoch)
+            # 훈련
+            train_loss, avg_reasoning_steps = self.train_epoch(train_loader, epoch)
             
-            # Evaluate
+            # 평가
             eval_loss, accuracy, predictions, targets = self.evaluate(eval_loader)
             
-            # Update metrics
-            self.metrics['train_losses'].append(train_loss)
-            self.metrics['eval_losses'].append(eval_loss)
-            self.metrics['eval_accuracies'].append(accuracy)
+            # 메트릭 업데이트
+            self.result_manager.update_metrics(
+                epoch=epoch,
+                train_loss=train_loss,
+                eval_loss=eval_loss,
+                accuracy=accuracy,
+                reasoning_steps=avg_reasoning_steps
+            )
             
-            # Logging
-            print(f"\nEpoch {epoch + 1}/{self.config.num_epochs}")
-            print(f"  Train Loss: {train_loss:.4f}")
-            print(f"  Eval Loss:  {eval_loss:.4f}")
-            print(f"  Accuracy:   {accuracy:.4f}")
+            # 로깅
+            results_msg = f"\nEpoch {epoch + 1}/{self.config.num_epochs}\n"
+            results_msg += f"  Train Loss: {train_loss:.4f}\n"
+            results_msg += f"  Eval Loss:  {eval_loss:.4f}\n"
+            results_msg += f"  Accuracy:   {accuracy:.4f}\n"
             
-            # Track reasoning efficiency for Connection Transformer
-            avg_steps = None
-            if self.metrics['reasoning_steps']:
-                avg_steps = sum(self.metrics['reasoning_steps'][-50:]) / len(self.metrics['reasoning_steps'][-50:])
-                print(f"  Avg Steps:  {avg_steps:.1f}")
+            if avg_reasoning_steps is not None:
+                results_msg += f"  Avg Steps:  {avg_reasoning_steps:.1f}\n"
             
-            # Generate visualizations during training
-            self._generate_training_visualizations(epoch, predictions, targets, avg_steps)
+            print(results_msg)
+            self.result_manager.log_training(results_msg)
             
-            # Save best model
+            # 최고 모델 저장
             if accuracy > best_accuracy:
                 best_accuracy = accuracy
-                self._save_checkpoint(epoch, accuracy, is_best=True)
-                print(f"  💾 New best: {best_accuracy:.4f}")
+                final_predictions = predictions
+                final_targets = targets
+                
+                self.result_manager.save_checkpoint(
+                    self.model, self.optimizer, epoch, accuracy, is_best=True
+                )
+                
+                best_msg = f"  💾 New best: {best_accuracy:.4f}"
+                print(best_msg)
+                self.result_manager.log_training(best_msg)
             
             print("-" * 50)
         
-        print(f"\n✅ Training completed! Best accuracy: {best_accuracy:.4f}")
-        self._save_results(best_accuracy, predictions, targets)
+        complete_msg = f"\n✅ Training completed! Best accuracy: {best_accuracy:.4f}"
+        print(complete_msg)
+        self.result_manager.log_training(complete_msg)
+        
+        # 최종 분석 수행
+        self.result_manager.finalize_training(
+            best_accuracy, self.model, final_predictions, final_targets
+        )
         
         return best_accuracy
-    
-    def _save_checkpoint(self, epoch, accuracy, is_best=False):
-        """Save model checkpoint"""
-        os.makedirs(getattr(self.config, 'output_dir', './outputs'), exist_ok=True)
-        
-        checkpoint = {
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'accuracy': accuracy,
-            'config': vars(self.config)
-        }
-        
-        filename = f'{"best" if is_best else f"epoch_{epoch}"}_{self.model_type}_{self.config.dataset_name}.pt'
-        filepath = os.path.join(getattr(self.config, 'output_dir', './outputs'), filename)
-        torch.save(checkpoint, filepath)
-    
-    def _generate_training_visualizations(self, epoch, predictions, targets, avg_steps):
-        """Generate and save visualizations during training"""
-        output_dir = getattr(self.config, 'output_dir', './outputs')
-        vis_dir = os.path.join(output_dir, 'visualizations')
-        os.makedirs(vis_dir, exist_ok=True)
-        
-        try:
-            from utils.visualization import plot_training_curves, visualize_connection_matrix, plot_accuracy_breakdown
-            
-            # 1. Training curves (every epoch)
-            if len(self.metrics['train_losses']) > 0:
-                reasoning_steps_avg = None
-                if self.metrics['reasoning_steps']:
-                    # Convert to epoch-wise averages
-                    reasoning_steps_avg = []
-                    steps_per_epoch = len(self.metrics['reasoning_steps']) // max(len(self.metrics['train_losses']), 1)
-                    for i in range(len(self.metrics['train_losses'])):
-                        start_idx = i * steps_per_epoch
-                        end_idx = min((i + 1) * steps_per_epoch, len(self.metrics['reasoning_steps']))
-                        if start_idx < len(self.metrics['reasoning_steps']):
-                            epoch_avg = sum(self.metrics['reasoning_steps'][start_idx:end_idx]) / max(end_idx - start_idx, 1)
-                            reasoning_steps_avg.append(epoch_avg)
-                
-                plot_training_curves(
-                    train_losses=self.metrics['train_losses'],
-                    eval_accuracies=self.metrics['eval_accuracies'],
-                    reasoning_steps=reasoning_steps_avg,
-                    save_path=os.path.join(vis_dir, f'training_curves_epoch_{epoch+1}.png')
-                )
-            
-            # 2. Connection Matrix (for Connection Transformer, every 2 epochs or when best)
-            if (self.model_type == "connection" and 
-                hasattr(self.model, 'get_connection_analysis') and
-                (epoch % 2 == 0 or epoch == self.config.num_epochs - 1)):
-                
-                visualize_connection_matrix(
-                    self.model,
-                    save_path=os.path.join(vis_dir, f'connection_matrix_epoch_{epoch+1}.png')
-                )
-                
-                # Save connection analysis as text
-                analysis = self.model.get_connection_analysis()
-                analysis_path = os.path.join(vis_dir, f'connection_analysis_epoch_{epoch+1}.txt')
-                with open(analysis_path, 'w') as f:
-                    f.write(f"Connection Analysis - Epoch {epoch+1}\n")
-                    f.write("=" * 40 + "\n")
-                    f.write(f"Sparsity Ratio: {analysis.get('sparsity_ratio', 0):.4f}\n")
-                    f.write(f"Max Connection: {analysis.get('max_connection', 0):.4f}\n")
-                    f.write(f"Mean Connection: {analysis.get('mean_connection', 0):.4f}\n")
-                    if 'orthogonality_quality' in analysis:
-                        f.write(f"Orthogonality Quality: {analysis['orthogonality_quality']:.4f}\n")
-                    if avg_steps is not None:
-                        f.write(f"Average Reasoning Steps: {avg_steps:.2f}\n")
-            
-            # 3. Accuracy breakdown (every epoch)
-            if predictions and targets:
-                plot_accuracy_breakdown(
-                    predictions=predictions,
-                    targets=targets,
-                    dataset_type=self.config.dataset_name,
-                    save_path=os.path.join(vis_dir, f'accuracy_breakdown_epoch_{epoch+1}.png')
-                )
-            
-            # 4. Log visualization info
-            if epoch % 2 == 0:  # Don't spam logs
-                print(f"  📈 Visualizations saved to {vis_dir}/")
-                
-        except Exception as e:
-            print(f"  ⚠️ Visualization error: {str(e)[:50]}...")
-    
-    def _save_final_analysis(self, best_accuracy):
-        """Save comprehensive final analysis"""
-        output_dir = getattr(self.config, 'output_dir', './outputs')
-        analysis_dir = os.path.join(output_dir, 'analysis')
-        os.makedirs(analysis_dir, exist_ok=True)
-        
-        try:
-            # Final training report
-            report_path = os.path.join(analysis_dir, f'training_report_{self.model_type}_{self.config.dataset_name}.md')
-            with open(report_path, 'w') as f:
-                f.write(f"# Training Report: {self.model_type.title()} on {self.config.dataset_name.upper()}\n\n")
-                f.write(f"**Final Accuracy**: {best_accuracy:.4f}\n\n")
-                
-                f.write("## Configuration\n")
-                f.write(f"- Model: {self.model_type}\n")
-                f.write(f"- Dataset: {self.config.dataset_name}\n")
-                f.write(f"- d_model: {self.config.d_model}\n")
-                f.write(f"- Batch size: {self.config.batch_size}\n")
-                f.write(f"- Learning rate: {self.config.learning_rate}\n")
-                f.write(f"- Epochs: {self.config.num_epochs}\n")
-                
-                if hasattr(self.config, 'num_slots'):
-                    f.write(f"- Slots: {self.config.num_slots}\n")
-                    f.write(f"- Bilinear rank: {self.config.bilinear_rank}\n")
-                    f.write(f"- Max reasoning steps: {self.config.max_reasoning_steps}\n")
-                
-                f.write("\n## Training Progress\n")
-                f.write(f"- Final train loss: {self.metrics['train_losses'][-1]:.4f}\n")
-                f.write(f"- Final eval loss: {self.metrics['eval_losses'][-1]:.4f}\n")
-                f.write(f"- Best accuracy: {best_accuracy:.4f}\n")
-                
-                if self.metrics['reasoning_steps']:
-                    avg_steps = sum(self.metrics['reasoning_steps']) / len(self.metrics['reasoning_steps'])
-                    f.write(f"- Average reasoning steps: {avg_steps:.2f}\n")
-                
-                f.write("\n## Model Analysis\n")
-                if self.model_type == "connection" and hasattr(self.model, 'get_connection_analysis'):
-                    analysis = self.model.get_connection_analysis()
-                    f.write(f"- Connection sparsity: {analysis.get('sparsity_ratio', 0):.4f}\n")
-                    f.write(f"- Max connection strength: {analysis.get('max_connection', 0):.4f}\n")
-                    if 'orthogonality_quality' in analysis:
-                        f.write(f"- Orthogonality quality: {analysis['orthogonality_quality']:.4f}\n")
-                
-                total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-                f.write(f"- Total parameters: {total_params:,}\n")
-            
-            print(f"📋 Training report saved: {report_path}")
-            
-        except Exception as e:
-            print(f"⚠️ Analysis error: {e}")
-    
-    def _save_results(self, best_accuracy, predictions, targets):
-        """Save training results with enhanced analysis"""
-        output_dir = getattr(self.config, 'output_dir', './outputs')
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Enhanced results structure
-        results = {
-            'model_type': self.model_type,
-            'dataset': self.config.dataset_name,
-            'best_accuracy': best_accuracy,
-            'metrics': self.metrics,
-            'sample_predictions': predictions,
-            'sample_targets': targets,
-            'config': {
-                'd_model': self.config.d_model,
-                'num_slots': getattr(self.config, 'num_slots', 0),
-                'bilinear_rank': getattr(self.config, 'bilinear_rank', 0),
-                'max_reasoning_steps': getattr(self.config, 'max_reasoning_steps', 0),
-                'learning_rate': self.config.learning_rate,
-                'batch_size': self.config.batch_size,
-                'num_epochs': self.config.num_epochs,
-                'num_decoder_layers': getattr(self.config, 'num_decoder_layers', 0),
-                'num_heads': getattr(self.config, 'num_heads', 0)
-            },
-            'timestamp': time.strftime("%Y%m%d_%H%M%S")
-        }
-        
-        # Add model analysis for Connection Transformer
-        if self.model_type == "connection" and hasattr(self.model, 'get_connection_analysis'):
-            results['connection_analysis'] = self.model.get_connection_analysis()
-        
-        # Save JSON results
-        filename = f'results_{self.model_type}_{self.config.dataset_name}_{results["timestamp"]}.json'
-        filepath = os.path.join(output_dir, filename)
-        
-        with open(filepath, 'w') as f:
-            json.dump(results, f, indent=2, default=str)
-        
-        print(f"📊 Results saved to {filename}")
-        
-        # Save final analysis
-        self._save_final_analysis(best_accuracy)
