@@ -86,7 +86,6 @@ class BaseReasoningDataset(Dataset, ABC):
                 break
     
     def _tokenize_item(self, item):
-        """Tokenize single item"""
         # Source tokenization
         src_inputs = self.tokenizer(
             item['input_text'],
@@ -96,28 +95,37 @@ class BaseReasoningDataset(Dataset, ABC):
             return_tensors='pt'
         )
         
-        # Target tokenization
-        with self.tokenizer.as_target_tokenizer():
-            tgt_inputs = self.tokenizer(
-                item['target_text'],
-                max_length=self.answer_max_length,
-                padding='max_length',
-                truncation=True,
-                return_tensors='pt'
-            )
+        tgt_inputs = self.tokenizer(
+            item['target_text'],
+            max_length=self.answer_max_length,
+            padding='max_length', 
+            truncation=True,
+            return_tensors='pt'
+        )
         
-        # Create labels
+        # T5 스타일 decoder_input_ids 생성
+        decoder_input_ids = tgt_inputs.input_ids.squeeze().clone()
+        decoder_input_ids = self._shift_right_t5(decoder_input_ids)
+        
+        # Labels 생성
         labels = tgt_inputs.input_ids.squeeze().clone()
         labels[labels == self.tokenizer.pad_token_id] = -100
         
         return {
             'input_ids': src_inputs.input_ids.squeeze(),
             'attention_mask': src_inputs.attention_mask.squeeze(),
-            'decoder_input_ids': tgt_inputs.input_ids.squeeze(),
+            'decoder_input_ids': decoder_input_ids,
             'decoder_attention_mask': tgt_inputs.attention_mask.squeeze(),
             'labels': labels,
             'target_text': item['target_text']
         }
+
+    def _shift_right_t5(self, input_ids):
+        """T5 방식 decoder input: 한 칸 오른쪽으로 shift"""
+        shifted_input_ids = input_ids.clone()
+        shifted_input_ids[1:] = input_ids[:-1]
+        shifted_input_ids[0] = self.tokenizer.pad_token_id  # 또는 decoder_start_token_id
+        return shifted_input_ids
     
     def _get_fallback_item(self):
         """Fallback item for errors"""
