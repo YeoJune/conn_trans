@@ -130,10 +130,10 @@ class GSM8KDataset(BaseReasoningDataset):
         if idx is not None:
             print(f"⚠️ GSM8K item {idx}: Could not extract final answer from: '{answer_text[:100]}...'")
         
-        return "0"
+        return "-4294967295"
     
     def _get_default_answer(self):
-        return "0"
+        return "-4294967295"
     
     def _is_valid_item(self, item):
         """GSM8K 특화 검증"""

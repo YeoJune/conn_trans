@@ -64,8 +64,8 @@ def extract_final_answer(text: str, dataset_type: Optional[str] = None) -> str:
             except ValueError:
                 pass
         
-        # 첫 번째 단어가 숫자가 아니면 "0" 반환 (틀린 것으로 간주)
-        return "0"
+        # 첫 번째 단어가 숫자가 아니면 "error" 반환 (틀린 것으로 간주)
+        return "error"
     
     elif dataset_type == "logiqa":
         # 다중 선택 문제 - A, B, C, D
