@@ -137,25 +137,32 @@ class ConnectionTransformer(nn.Module):
                         nn.init.orthogonal_(self.W_target[i, j].unsqueeze(0))
     
     def bilinear_transform(self, H_state):
-        """의미적으로 올바르고 메모리 효율적인 버전"""
+        """모든 조건을 만족하는 벡터화 버전"""
         # 연결 강도 계산: [N, N, r] * [N, N, r] -> [N, N]
         connection_matrix = torch.sum(self.W_source * self.W_target, dim=-1)  # [N, N]
         
         # 자기 연결 제거
         connection_matrix.fill_diagonal_(0.0)
         
+        # 메모리 효율적인 방법: 배치 차원별로 처리하되 벡터화
         batch_size, num_slots, d_model = H_state.shape
         
-        # 배치별로 처리 (메모리 절약)
-        influence = torch.zeros_like(H_state)
+        # connection_matrix.T를 미리 계산 (메모리 절약)
+        conn_T = connection_matrix.T  # [N, N]
         
+        # 각 배치를 개별 처리 (OOM 방지)
+        results = []
         for b in range(batch_size):
-            h_single = H_state[b]  # [N, D]
+            h_b = H_state[b]  # [N, D]
             
-            # 올바른 연산: influence[j, d] = sum_i(h_single[i, d] * connection_matrix[i, j])
-            # 즉, h_single @ connection_matrix
-            # [N, D] @ [N, N] = [N, D]
-            influence[b] = h_single @ connection_matrix
+            # 벡터화된 연산: [N, N] @ [N, D] = [N, D]
+            # influence[j, d] = sum_i(conn_T[j, i] * h_b[i, d])
+            #                 = sum_i(connection_matrix[i, j] * h_b[i, d])
+            influence_b = conn_T @ h_b  # [N, D]
+            results.append(influence_b)
+        
+        # 배치 차원으로 스택
+        influence = torch.stack(results, dim=0)  # [B, N, D]
         
         return influence
 
