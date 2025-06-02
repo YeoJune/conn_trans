@@ -120,19 +120,24 @@ class VisualizationManager:
             print(f"⚠️ 연결 행렬 시각화 실패: {str(e)[:50]}...")
     
     def plot_accuracy_breakdown(self, predictions: List[str], targets: List[str], dataset_type: str):
-        """정확도 세부 분석 - 간결하고 유용하게"""
+        """정확도 세부 분석 - 전체 데이터 기반"""
         if not predictions or not targets:
             return
         
         try:
-            from .metrics import exact_match_score
+            from .metrics import get_accuracy_breakdown
             
-            # 정확도 계산
-            correct = sum(exact_match_score(p, t, dataset_type) for p, t in zip(predictions, targets))
-            total = len(predictions)
-            accuracy = correct / total
+            # 전체 데이터에 대한 세부 분석
+            breakdown = get_accuracy_breakdown(predictions, targets, dataset_type)
             
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+            if breakdown['total'] == 0:
+                return
+            
+            accuracy = breakdown['accuracy']
+            correct = breakdown['correct']
+            total = breakdown['total']
+            
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
             
             # 1. 전체 정확도 파이 차트
             labels = ['Correct', 'Incorrect']
@@ -141,30 +146,43 @@ class VisualizationManager:
             
             wedges, texts, autotexts = ax1.pie(sizes, labels=labels, colors=colors, 
                                               autopct='%1.1f%%', startangle=90,
-                                              textprops={'fontsize': 11})
+                                              textprops={'fontsize': 12})
             ax1.set_title(f'Overall Accuracy\n{correct}/{total} = {accuracy:.1%}', 
-                         fontsize=12, fontweight='bold')
+                         fontsize=14, fontweight='bold')
             
-            # 2. 샘플 분석 (처음 10개)
-            sample_size = min(10, len(predictions))
-            sample_correct = [exact_match_score(predictions[i], targets[i], dataset_type) 
-                            for i in range(sample_size)]
+            # 2. 샘플별 정확도 분포 (처음 20개)
+            sample_size = min(20, len(breakdown['details']))
+            sample_details = breakdown['details'][:sample_size]
             
             x_pos = range(sample_size)
-            colors_bar = ['#2ecc71' if c else '#e74c3c' for c in sample_correct]
+            colors_bar = ['#2ecc71' if detail['correct'] else '#e74c3c' 
+                         for detail in sample_details]
             
-            ax2.bar(x_pos, [1] * sample_size, color=colors_bar, alpha=0.7)
-            ax2.set_title(f'Sample Results (First {sample_size})', fontsize=12, fontweight='bold')
+            bars = ax2.bar(x_pos, [1] * sample_size, color=colors_bar, alpha=0.7, width=0.8)
+            
+            # 정확/오답 개수 표시
+            sample_correct = sum(1 for detail in sample_details if detail['correct'])
+            ax2.set_title(f'Sample Results (First {sample_size})\n{sample_correct}/{sample_size} Correct', 
+                         fontsize=14, fontweight='bold')
             ax2.set_xlabel('Sample Index')
-            ax2.set_ylabel('Correct (1) / Incorrect (0)')
-            ax2.set_xticks(x_pos)
+            ax2.set_ylabel('Result')
+            ax2.set_xticks(range(0, sample_size, max(1, sample_size//10)))
             ax2.set_ylim(0, 1.2)
             ax2.grid(True, alpha=0.3, axis='y')
             
-            # 정확한 개수 표시
-            sample_correct_count = sum(sample_correct)
-            ax2.text(0.02, 0.95, f'{sample_correct_count}/{sample_size}', 
-                    transform=ax2.transAxes, fontsize=11, fontweight='bold',
+            # 범례 추가
+            from matplotlib.patches import Patch
+            legend_elements = [Patch(facecolor='#2ecc71', label='Correct'),
+                             Patch(facecolor='#e74c3c', label='Incorrect')]
+            ax2.legend(handles=legend_elements, loc='upper right')
+            
+            # 통계 정보 추가
+            stats_text = f"Dataset: {dataset_type.upper()}\n"
+            stats_text += f"Total Samples: {total:,}\n"
+            stats_text += f"Accuracy: {accuracy:.1%}"
+            
+            ax1.text(0.02, 0.02, stats_text, transform=ax1.transAxes, 
+                    fontsize=10, verticalalignment='bottom',
                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
             
             plt.tight_layout()
@@ -172,7 +190,7 @@ class VisualizationManager:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             plt.close()
             
-            print(f"📊 정확도 분석 저장: {save_path.name}")
+            print(f"📊 정확도 분석 저장: {save_path.name} (전체 {total}개 샘플 분석)")
             
         except Exception as e:
             print(f"⚠️ 정확도 분석 실패: {str(e)[:50]}...")

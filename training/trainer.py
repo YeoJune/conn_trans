@@ -217,14 +217,16 @@ class Trainer:
         return avg_loss, avg_reasoning_steps
     
     def evaluate(self, eval_loader):
-        """모델 평가"""
+        """모델 평가 - 전체 데이터에 대해 정확도 계산"""
         self.model.eval()
         total_loss = 0.0
-        predictions = []
-        targets = []
+        all_predictions = []
+        all_targets = []
+        sample_predictions = []  # 시각화용 샘플
+        sample_targets = []
         
         with torch.no_grad():
-            for batch in eval_loader:
+            for batch_idx, batch in enumerate(eval_loader):
                 try:
                     # 텐서 추출
                     tensors = self._extract_batch_tensors(batch)
@@ -235,26 +237,35 @@ class Trainer:
                     
                     total_loss += loss.item()
                     
-                    # 예측 생성 (처음 4개 샘플만)
+                    # 전체 배치에 대해 예측 생성
                     predicted_ids = torch.argmax(logits, dim=-1)
-                    batch_size = min(logits.size(0), 4)
+                    batch_size = logits.size(0)
                     
                     for i in range(batch_size):
                         pred_tokens = predicted_ids[i].cpu()
                         pred_text = self.tokenizer.decode(pred_tokens, skip_special_tokens=True)
-                        target_text = batch.get('target_text', [''])[i]
+                        target_text = batch.get('target_text', [''])[i] if i < len(batch.get('target_text', [])) else ''
                         
-                        predictions.append(pred_text.strip())
-                        targets.append(str(target_text).strip())
+                        # 전체 예측 저장 (정확도 계산용)
+                        all_predictions.append(pred_text.strip())
+                        all_targets.append(str(target_text).strip())
+                        
+                        # 처음 몇 개만 샘플로 저장 (시각화용)
+                        if len(sample_predictions) < 10:  # 샘플 개수 증가
+                            sample_predictions.append(pred_text.strip())
+                            sample_targets.append(str(target_text).strip())
                 
                 except Exception as e:
                     print(f"⚠️ Eval error: {str(e)[:50]}...")
                     continue
         
         avg_loss = total_loss / max(len(eval_loader), 1)
-        accuracy = calculate_accuracy(predictions, targets, self.config.dataset_name) if predictions else 0.0
         
-        return avg_loss, accuracy, predictions[:5], targets[:5]
+        # 전체 데이터에 대해 정확도 계산
+        accuracy = calculate_accuracy(all_predictions, all_targets, self.config.dataset_name) if all_predictions else 0.0
+        
+        # 시각화용으로는 샘플만 반환
+        return avg_loss, accuracy, sample_predictions, sample_targets
     
     def train(self, train_dataset, eval_dataset):
         """주 훈련 루프"""
