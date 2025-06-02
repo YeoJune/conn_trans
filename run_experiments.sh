@@ -88,6 +88,12 @@ get_model_size() {
         "multinli")
             echo "base"
             ;;
+        "eli5")
+            echo "base"
+            ;;
+        "commongen")
+            echo "small"
+            ;;
         *)
             echo "micro"
             ;;
@@ -99,7 +105,7 @@ if [ "$DATASET" = "all" ]; then
     echo "🎯 Running all datasets"
     echo ""
     
-    for dataset in strategyqa logiqa gsm8k multinli; do
+    for dataset in strategyqa logiqa gsm8k multinli eli5 commongen; do
         size=$(get_model_size $dataset $MODEL_SIZE)
         run_comparison $dataset $size
     done
@@ -109,13 +115,13 @@ else
     
     # Validate dataset
     case $DATASET in
-        "strategyqa"|"logiqa"|"gsm8k"|"multinli")
+        "strategyqa"|"logiqa"|"gsm8k"|"multinli"|"eli5"|"commongen")
             size=$(get_model_size $DATASET $MODEL_SIZE)
             run_comparison $DATASET $size
             ;;
         *)
             echo "❌ Unknown dataset: $DATASET"
-            echo "Available: strategyqa, logiqa, gsm8k, multinli"
+            echo "Available: strategyqa, logiqa, gsm8k, multinli, eli5, commongen"
             exit 1
             ;;
     esac
