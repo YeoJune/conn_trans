@@ -74,50 +74,102 @@ class VisualizationManager:
         plt.close()
         
         print(f"📈 학습 곡선 저장: {save_path.name}")
-    
     def plot_connection_matrix(self, model):
-        """연결 행렬 시각화 - Connection Transformer 전용"""
-        if not hasattr(model, 'get_connection_analysis'):
+        """연결 행렬 시각화 - 간소화된 Connection Transformer 전용"""
+        if not hasattr(model, 'W_source') or not hasattr(model, 'W_target'):
             return
         
         try:
-            analysis = model.get_connection_analysis()
-            matrix = analysis.get('connection_matrix')
+            # 간소화된 bilinear에서 직접 연결 행렬 계산
+            with torch.no_grad():
+                # 연결 강도 계산: [N, N, r] * [N, N, r] -> [N, N]
+                connection_matrix = torch.sum(model.W_source * model.W_target, dim=-1)
+                
+                # 자기 연결 제거 (대각선 0으로)
+                num_slots = connection_matrix.size(0)
+                mask = torch.eye(num_slots, device=connection_matrix.device, dtype=torch.bool)
+                connection_matrix = connection_matrix.masked_fill(mask, 0.0)
+                
+                matrix_np = connection_matrix.cpu().numpy()
             
-            if matrix is None:
-                return
+            plt.figure(figsize=(10, 8))
             
-            matrix_np = matrix.cpu().numpy() if hasattr(matrix, 'cpu') else matrix
+            # 히트맵 생성 - 더 세밀한 컬러맵
+            im = sns.heatmap(matrix_np, 
+                            cmap='RdBu_r', 
+                            center=0, 
+                            square=True,
+                            cbar_kws={'label': 'Connection Strength'},
+                            fmt='.3f',
+                            linewidths=0.1,
+                            linecolor='gray')
             
-            plt.figure(figsize=(8, 6))
+            plt.title('Slot-to-Slot Connection Matrix\n(Red: Positive Influence, Blue: Negative Influence)', 
+                    fontsize=14, fontweight='bold')
+            plt.xlabel('Target Slot', fontsize=12)
+            plt.ylabel('Source Slot', fontsize=12)
             
-            # 히트맵 생성
-            sns.heatmap(matrix_np, 
-                       cmap='RdBu_r', 
-                       center=0, 
-                       square=True,
-                       cbar_kws={'label': 'Connection Strength'},
-                       fmt='.3f')
+            # 통계 정보 계산 및 표시
+            abs_matrix = np.abs(matrix_np)
+            sparsity_ratio = (abs_matrix < 0.1).mean()  # 작은 값들의 비율
+            max_connection = abs_matrix.max()
+            mean_connection = abs_matrix.mean()
+            std_connection = abs_matrix.std()
             
-            plt.title('Connection Matrix\n(Red: Positive, Blue: Negative)', 
-                     fontsize=14, fontweight='bold')
-            plt.xlabel('Target Slot')
-            plt.ylabel('Source Slot')
+            # 연결 분포 정보
+            positive_connections = (matrix_np > 0.01).sum()
+            negative_connections = (matrix_np < -0.01).sum()
+            total_possible = num_slots * (num_slots - 1)  # 자기 연결 제외
             
-            # 통계 정보 추가
-            sparsity = analysis.get('sparsity_ratio', 0)
-            max_conn = analysis.get('max_connection', 0)
-            plt.figtext(0.02, 0.02, f'Sparsity: {sparsity:.3f} | Max: {max_conn:.3f}', 
-                       fontsize=10, style='italic')
+            stats_text = (f'Sparsity: {sparsity_ratio:.3f} | Max: {max_connection:.3f} | Mean: {mean_connection:.3f}\n'
+                        f'Positive: {positive_connections}/{total_possible} | '
+                        f'Negative: {negative_connections}/{total_possible} | '
+                        f'Std: {std_connection:.3f}')
             
-            save_path = self.output_dir / 'connection_matrix.png'
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.figtext(0.02, 0.02, stats_text, 
+                    fontsize=10, style='italic',
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="wheat", alpha=0.7))
+            
+            # 연결 강도 분포 히스토그램도 함께 저장
+            plt.figure(figsize=(8, 4))
+            flat_connections = matrix_np[matrix_np != 0]  # 0이 아닌 연결만
+            
+            plt.subplot(1, 2, 1)
+            plt.hist(flat_connections, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
+            plt.xlabel('Connection Strength')
+            plt.ylabel('Frequency')
+            plt.title('Connection Strength Distribution')
+            plt.grid(True, alpha=0.3)
+            
+            plt.subplot(1, 2, 2)
+            plt.hist(np.abs(flat_connections), bins=30, alpha=0.7, color='orange', edgecolor='black')
+            plt.xlabel('|Connection Strength|')
+            plt.ylabel('Frequency')
+            plt.title('Absolute Connection Strength')
+            plt.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            
+            # 파일 저장
+            matrix_save_path = self.output_dir / 'connection_matrix.png'
+            plt.figure(1)  # 첫 번째 그림으로 돌아가기
+            plt.savefig(matrix_save_path, dpi=300, bbox_inches='tight')
             plt.close()
             
-            print(f"🔗 연결 행렬 저장: {save_path.name}")
+            dist_save_path = self.output_dir / 'connection_distribution.png'
+            plt.figure(2)  # 두 번째 그림
+            plt.savefig(dist_save_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"🔗 연결 행렬 저장: {matrix_save_path.name}")
+            print(f"📊 연결 분포 저장: {dist_save_path.name}")
+            print(f"   📈 활성 연결: {positive_connections + negative_connections}/{total_possible} "
+                f"({(positive_connections + negative_connections)/total_possible*100:.1f}%)")
             
         except Exception as e:
             print(f"⚠️ 연결 행렬 시각화 실패: {str(e)[:50]}...")
+            import traceback
+            traceback.print_exc()
     
     def plot_accuracy_breakdown(self, predictions: List[str], targets: List[str], dataset_type: str):
         """정확도 세부 분석 - 전체 데이터 기반"""

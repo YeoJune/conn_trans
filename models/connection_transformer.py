@@ -34,8 +34,8 @@ class ConnectionTransformer(nn.Module):
         self.register_buffer('H', self._create_orthogonal_slots(num_slots, d_model))
         
         # Bilinear connection matrices - will be orthogonally initialized
-        self.W_source = nn.Parameter(torch.zeros(num_slots, num_slots, d_model, bilinear_rank))
-        self.W_target = nn.Parameter(torch.zeros(num_slots, num_slots, bilinear_rank, d_model))
+        self.W_source = nn.Parameter(torch.zeros(num_slots, num_slots, bilinear_rank))
+        self.W_target = nn.Parameter(torch.zeros(num_slots, num_slots, bilinear_rank))
         
         # Encoder cross-attention projection matrices
         self.W_q_input = nn.Linear(d_model, d_model, bias=False)
@@ -127,50 +127,45 @@ class ConnectionTransformer(nn.Module):
         nn.init.orthogonal_(self.output_projection.weight)
     
     def _orthogonal_init_bilinear(self):
-        """Proper orthogonal initialization for bilinear matrices"""
+        """간소화된 orthogonal 초기화"""
         with torch.no_grad():
             for i in range(self.num_slots):
                 for j in range(self.num_slots):
                     if i != j:  # Only non-self connections
-                        # W_source[i,j]: [D, r] - orthogonal columns
-                        W_src = self.W_source[i, j]  # [D, r]
-                        if W_src.size(0) >= W_src.size(1):  # D >= r
-                            Q, _ = torch.qr(torch.randn(W_src.size(0), W_src.size(0)))
-                            self.W_source[i, j] = Q[:, :W_src.size(1)]
-                        else:  # r > D (rare case)
-                            nn.init.orthogonal_(W_src)
-                        
-                        # W_target[i,j]: [r, D] - orthogonal rows
-                        W_tgt = self.W_target[i, j]  # [r, D]
-                        if W_tgt.size(1) >= W_tgt.size(0):  # D >= r
-                            Q, _ = torch.qr(torch.randn(W_tgt.size(1), W_tgt.size(1)))
-                            self.W_target[i, j] = Q[:W_tgt.size(0), :]
-                        else:  # r > D (rare case)
-                            nn.init.orthogonal_(W_tgt)
+                        # 단순한 orthogonal 초기화
+                        nn.init.orthogonal_(self.W_source[i, j].unsqueeze(0))
+                        nn.init.orthogonal_(self.W_target[i, j].unsqueeze(0))
     
     def bilinear_transform(self, H_state):
-        """Orthogonal-regularized bilinear slot-to-slot influences"""
+        """벡터화된 간소화 bilinear transformation"""
         batch_size, num_slots, d_model = H_state.shape
         device = H_state.device
         
-        # Vectorized bilinear transformation
-        H_expanded = H_state.unsqueeze(2).expand(batch_size, num_slots, num_slots, d_model)
+        # 연결 강도 계산: [N, N, r] * [N, N, r] -> [N, N]
+        connection_matrix = torch.sum(self.W_source * self.W_target, dim=-1)  # [N, N]
         
-        # First transformation: [B,N,N,D] × [N,N,D,r] -> [B,N,N,r]
-        intermediate = torch.einsum('bijd,ijdr->bijr', H_expanded, self.W_source)
-        
-        # Second transformation: [B,N,N,r] × [N,N,r,D] -> [B,N,N,D]
-        output = torch.einsum('bijr,ijrd->bijd', intermediate, self.W_target)
-        
-        # Remove self-connections
+        # 자기 연결 제거
         mask = torch.eye(num_slots, device=device, dtype=torch.bool)
-        output[:, mask] = 0
+        connection_matrix = connection_matrix.masked_fill(mask, 0.0)
         
-        # Sum over source slots
-        influence = output.sum(dim=1)  # [B, N, D]
+        # 벡터화된 영향 계산
+        # H_state: [B, N, D]
+        # connection_matrix: [N, N] where connection_matrix[i,j] = influence from slot i to slot j
+        
+        # H_state를 확장: [B, N, D] -> [B, N, 1, D]
+        H_expanded = H_state.unsqueeze(2)  # [B, N, 1, D]
+        
+        # connection_matrix를 확장: [N, N] -> [1, N, N, 1]
+        connection_expanded = connection_matrix.unsqueeze(0).unsqueeze(-1)  # [1, N, N, 1]
+        
+        # 영향 계산: [B, N, 1, D] * [1, N, N, 1] -> [B, N, N, D]
+        influences = H_expanded * connection_expanded  # [B, N, N, D]
+        
+        # 각 타겟 슬롯에 대해 모든 소스로부터의 영향 합산
+        influence = influences.sum(dim=1)  # [B, N, D]
         
         return influence
-    
+
     def encode(self, src_input_ids, src_attention_mask=None, return_reasoning_trace=False):
         """
         Encoder: Input tokens → Semantic slots with bilinear reasoning
@@ -321,25 +316,23 @@ class ConnectionTransformer(nn.Module):
             return logits
     
     def orthogonal_regularization_loss(self):
-        """Orthogonal regularization loss (same as before)"""
+        """간소화된 orthogonal regularization"""
         device = self.W_source.device
         
+        # 자기 연결 제외 마스크
         mask = torch.eye(self.num_slots, device=device, dtype=torch.bool)
         
-        # W_source orthogonality
-        gram_source = torch.einsum('ijdr,ijdq->ijrq', self.W_source, self.W_source)
-        gram_source_valid = gram_source[~mask]
-        
-        identity = torch.eye(self.bilinear_rank, device=device, dtype=gram_source.dtype)
-        identity_batch = identity.unsqueeze(0).expand(gram_source_valid.size(0), -1, -1)
-        
-        source_loss = F.mse_loss(gram_source_valid, identity_batch)
+        # W_source orthogonality (벡터 간 직교성)
+        W_source_valid = self.W_source[~mask]  # [N*(N-1), r]
+        gram_source = W_source_valid @ W_source_valid.T
+        identity_source = torch.eye(W_source_valid.size(0), device=device)
+        source_loss = F.mse_loss(gram_source, identity_source)
         
         # W_target orthogonality
-        gram_target = torch.einsum('ijrd,ijqd->ijrq', self.W_target, self.W_target)
-        gram_target_valid = gram_target[~mask]
-        
-        target_loss = F.mse_loss(gram_target_valid, identity_batch)
+        W_target_valid = self.W_target[~mask]  # [N*(N-1), r]
+        gram_target = W_target_valid @ W_target_valid.T
+        identity_target = torch.eye(W_target_valid.size(0), device=device)
+        target_loss = F.mse_loss(gram_target, identity_target)
         
         return (source_loss + target_loss) / 2
     
