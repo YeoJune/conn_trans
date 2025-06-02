@@ -45,7 +45,7 @@ class BaseConfig:
     def set_size(self, size):
         """모델 크기 설정"""
         sizes = {
-            "x-small": {
+            "micro": {
                 "d_model": 128, "num_slots": 32, "bilinear_rank": 8,
                 "max_reasoning_steps": 3, "num_decoder_layers": 4, "num_heads": 8,
                 "max_seq_len": 256, "batch_size": 12, "learning_rate": 2e-4

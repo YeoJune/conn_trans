@@ -68,7 +68,7 @@ class SystemVerifier:
             from configs.strategyqa_config import get_config
             
             # Test different sizes
-            for size in ["x-small", "small", "base"]:
+            for size in ["micro", "small", "base"]:
                 config = get_config(size)
                 
                 # Verify required attributes
@@ -169,7 +169,7 @@ class SystemVerifier:
             from configs.strategyqa_config import get_config
             
             # Use smallest config for fast testing
-            config = get_config("x-small")
+            config = get_config("micro")
             
             # Test dataset loading
             tokenizer, train_dataset, eval_dataset = get_tokenizer_and_dataset("strategyqa", config)
@@ -210,7 +210,7 @@ class SystemVerifier:
             from transformers import T5Tokenizer
             
             # Setup
-            config = get_config("x-small")
+            config = get_config("micro")
             tokenizer = T5Tokenizer.from_pretrained("google-t5/t5-base")
             config.vocab_size = tokenizer.vocab_size
             config.pad_token_id = tokenizer.pad_token_id
@@ -294,8 +294,8 @@ class SystemVerifier:
             from dataset.tokenizer_utils import get_tokenizer_and_dataset
             from configs.strategyqa_config import get_config
             
-            # Use x-small config for speed
-            config = get_config("x-small")
+            # Use micro config for speed
+            config = get_config("micro")
             config.num_epochs = 1  # Just one epoch
             config.batch_size = 2  # Small batch
             
@@ -387,7 +387,7 @@ class SystemVerifier:
         if self.tests_passed == self.tests_total:
             print("🎉 All tests PASSED! System is ready.")
             print("\n🚀 You can now run:")
-            print("   python main.py --dataset strategyqa --model connection --model_size x-small")
+            print("   python main.py --dataset strategyqa --model connection --model_size micro")
             return True
         else:
             print(f"❌ {self.tests_total - self.tests_passed} tests FAILED:")
