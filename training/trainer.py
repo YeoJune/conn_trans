@@ -361,13 +361,149 @@ class Trainer:
         print(complete_msg)
         self.result_manager.log_training(complete_msg)
         
+        # 상세 결과 파일 출력
+        self._save_detailed_results(best_accuracy, final_predictions, final_targets)
+        
         # 최종 분석 수행
         self.result_manager.finalize_training(
             best_accuracy, self.model, final_predictions, final_targets
         )
-        
+
         return best_accuracy
     
+    def _save_detailed_results(self, best_accuracy, predictions, targets):
+        """상세 결과를 파일로 저장"""
+        import json
+        import os
+        from datetime import datetime
+        
+        # 출력 디렉토리 설정
+        output_dir = getattr(self.config, 'output_dir', './outputs')
+        results_dir = os.path.join(output_dir, 'detailed_results')
+        os.makedirs(results_dir, exist_ok=True)
+        
+        # 파일명 생성
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{self.model_type}_{self.config.dataset_name}_{timestamp}"
+        
+        # === 1. 예측 결과 상세 분석 ===
+        prediction_details = []
+        correct_count = 0
+        
+        for i, (pred, target) in enumerate(zip(predictions, targets)):
+            is_correct = str(pred).strip() == str(target).strip()
+            if is_correct:
+                correct_count += 1
+                
+            prediction_details.append({
+                'index': i,
+                'prediction': str(pred).strip(),
+                'target': str(target).strip(),
+                'correct': is_correct,
+                'first_token': pred.split()[0] if pred and pred.split() else '',
+                'pred_length': len(str(pred)),
+                'target_length': len(str(target))
+            })
+        
+        # === 2. 통계 정보 ===
+        stats = {
+            'model_type': self.model_type,
+            'dataset': self.config.dataset_name,
+            'final_accuracy': float(best_accuracy),
+            'total_samples': len(predictions),
+            'correct_samples': correct_count,
+            'model_config': {
+                'd_model': getattr(self.config, 'd_model', None),
+                'num_slots': getattr(self.config, 'num_slots', None),
+                'bilinear_rank': getattr(self.config, 'bilinear_rank', None),
+                'max_reasoning_steps': getattr(self.config, 'max_reasoning_steps', None),
+                'batch_size': self.config.batch_size,
+                'learning_rate': self.config.learning_rate,
+                'num_epochs': self.config.num_epochs
+            }
+        }
+        
+        # === 3. 파라미터 수 계산 ===
+        total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        stats['total_parameters'] = int(total_params)
+        
+        # === 4. 예측 분포 분석 ===
+        from collections import Counter
+        pred_distribution = Counter(predictions)
+        target_distribution = Counter(targets)
+        
+        stats['prediction_distribution'] = dict(pred_distribution.most_common(10))
+        stats['target_distribution'] = dict(target_distribution.most_common(10))
+        
+        # === 5. 에러 분석 (틀린 케이스들) ===
+        error_cases = [item for item in prediction_details if not item['correct']]
+        error_summary = {
+            'total_errors': len(error_cases),
+            'common_wrong_predictions': dict(Counter([case['prediction'] for case in error_cases]).most_common(5)),
+            'sample_errors': error_cases[:10]  # 처음 10개 에러 케이스
+        }
+        
+        # === 6. JSON 파일 저장 ===
+        detailed_results = {
+            'metadata': {
+                'timestamp': timestamp,
+                'model_type': self.model_type,
+                'dataset': self.config.dataset_name,
+                'training_completed': True
+            },
+            'statistics': stats,
+            'error_analysis': error_summary,
+            'all_predictions': prediction_details
+        }
+        
+        json_path = os.path.join(results_dir, f"{filename}_detailed.json")
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(detailed_results, f, indent=2, ensure_ascii=False)
+        
+        # === 7. CSV 파일 저장 (간단한 버전) ===
+        csv_path = os.path.join(results_dir, f"{filename}_predictions.csv")
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write("index,prediction,target,correct,first_token\n")
+            for item in prediction_details:
+                f.write(f"{item['index']},{item['prediction']},{item['target']},{item['correct']},{item['first_token']}\n")
+        
+        # === 8. 텍스트 요약 저장 ===
+        summary_path = os.path.join(results_dir, f"{filename}_summary.txt")
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write(f"=== Training Results Summary ===\n")
+            f.write(f"Model: {self.model_type}\n")
+            f.write(f"Dataset: {self.config.dataset_name}\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write(f"Final Accuracy: {best_accuracy:.4f}\n")
+            f.write(f"Total Parameters: {total_params:,}\n")
+            f.write(f"Correct/Total: {correct_count}/{len(predictions)}\n\n")
+            
+            # 설정 정보
+            f.write(f"=== Model Configuration ===\n")
+            for key, value in stats['model_config'].items():
+                if value is not None:
+                    f.write(f"{key}: {value}\n")
+            f.write(f"\n")
+            
+            # 예측 분포
+            f.write(f"=== Top Predictions ===\n")
+            for pred, count in stats['prediction_distribution'].items():
+                f.write(f"'{pred}': {count} times\n")
+            f.write(f"\n")
+            
+            # 에러 샘플
+            f.write(f"=== Sample Errors ===\n")
+            for i, error in enumerate(error_summary['sample_errors'][:5]):
+                f.write(f"{i+1}. Predicted: '{error['prediction']}' | Target: '{error['target']}'\n")
+        
+        # === 9. 완료 메시지 ===
+        print(f"\n📁 Detailed results saved:")
+        print(f"   📊 JSON: {json_path}")
+        print(f"   📋 CSV: {csv_path}")
+        print(f"   📝 Summary: {summary_path}")
+        print(f"   🎯 Accuracy: {best_accuracy:.4f} ({correct_count}/{len(predictions)})")
+        print(f"   ⚙️ Parameters: {total_params:,}")
+
     def _create_validation_split(self, dataset, val_ratio=0.1):
         """간단한 validation split"""
         total = len(dataset)
