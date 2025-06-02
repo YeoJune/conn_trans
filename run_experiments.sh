@@ -21,7 +21,7 @@ echo "📏 Model Size: $MODEL_SIZE"
 echo ""
 
 # Create output directory
-OUTPUT_DIR="experiments_output"
+OUTPUT_DIR="outputs"
 mkdir -p $OUTPUT_DIR
 
 # Quick verification

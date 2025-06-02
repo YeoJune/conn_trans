@@ -296,7 +296,7 @@ chmod +x run_experiments.sh
 🎉 Analysis Complete!
 📊 Total experiments: 8
 🏆 Best accuracy: 0.7250
-📁 Results: experiments_output/comparisons/20250602_1445_comparison
+📁 Results: output/comparisons/20250602_1445_comparison
 ```
 
 ## 💡 Usage Examples
