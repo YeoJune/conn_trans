@@ -4,6 +4,8 @@ from .gsm8k_dataset import GSM8KDataset
 from .logiqa_dataset import LogiQADataset
 from .multinli_dataset import MultiNLIDataset
 from .strategyqa_dataset import StrategyQADataset
+from .eli5_dataset import ELI5Dataset
+from .commongen_dataset import CommonGenDataset
 import torch
 from torch.utils.data import Subset
 import random
@@ -21,7 +23,9 @@ def get_tokenizer_and_dataset(dataset_name, config):
         "gsm8k": GSM8KDataset,
         "logiqa": LogiQADataset,
         "multinli": MultiNLIDataset,
-        "strategyqa": StrategyQADataset
+        "strategyqa": StrategyQADataset,
+        "eli5": ELI5Dataset,
+        "commongen": CommonGenDataset
     }
     
     if dataset_name not in datasets:
@@ -128,7 +132,9 @@ def get_test_dataset(dataset_name, config, tokenizer):
         "gsm8k": GSM8KDataset,
         "logiqa": LogiQADataset,
         "multinli": MultiNLIDataset,
-        "strategyqa": StrategyQADataset
+        "strategyqa": StrategyQADataset,
+        "eli5": ELI5Dataset,
+        "commongen": CommonGenDataset
     }
     
     dataset_class = datasets[dataset_name]
