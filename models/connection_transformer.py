@@ -316,51 +316,31 @@ class ConnectionTransformer(nn.Module):
             return logits
     
     def orthogonal_regularization_loss(self):
-        """배치별로 나누어 처리하는 간소화된 orthogonal regularization"""
         device = self.W_source.device
-        
-        # 자기 연결 제외 마스크
         mask = torch.eye(self.num_slots, device=device, dtype=torch.bool)
         
-        # W_source orthogonality (벡터 간 직교성)
-        W_source_valid = self.W_source[~mask]  # [N*(N-1), r]
+        W_source_valid = self.W_source[~mask] 
+        W_target_valid = self.W_target[~mask]
         
-        # 배치로 나누어 gram 행렬 계산
-        chunk_size = 1000  # 청크 크기
-        total_valid = W_source_valid.size(0)
+        # 청크로 나누어 처리
+        chunk_size = 500
+        source_loss = 0
+        target_loss = 0
+        num_chunks = 0
         
-        source_losses = []
-        for i in range(0, total_valid, chunk_size):
-            end_i = min(i + chunk_size, total_valid)
-            chunk_source = W_source_valid[i:end_i]  # [chunk_size, r]
+        for i in range(0, len(W_source_valid), chunk_size):
+            chunk_s = W_source_valid[i:i+chunk_size]
+            chunk_t = W_target_valid[i:i+chunk_size]
             
-            gram_chunk = chunk_source @ W_source_valid.T  # [chunk_size, N*(N-1)]
-            identity_chunk = torch.zeros_like(gram_chunk)
-            identity_chunk[:, i:end_i] = torch.eye(end_i - i, device=device)
+            gram_s = chunk_s @ chunk_s.T
+            gram_t = chunk_t @ chunk_t.T
             
-            chunk_loss = F.mse_loss(gram_chunk, identity_chunk)
-            source_losses.append(chunk_loss)
+            eye = torch.eye(len(chunk_s), device=device)
+            source_loss += F.mse_loss(gram_s, eye)
+            target_loss += F.mse_loss(gram_t, eye)
+            num_chunks += 1
         
-        source_loss = torch.stack(source_losses).mean()
-        
-        # W_target orthogonality (동일한 방식)
-        W_target_valid = self.W_target[~mask]  # [N*(N-1), r]
-        
-        target_losses = []
-        for i in range(0, total_valid, chunk_size):
-            end_i = min(i + chunk_size, total_valid)
-            chunk_target = W_target_valid[i:end_i]  # [chunk_size, r]
-            
-            gram_chunk = chunk_target @ W_target_valid.T  # [chunk_size, N*(N-1)]
-            identity_chunk = torch.zeros_like(gram_chunk)
-            identity_chunk[:, i:end_i] = torch.eye(end_i - i, device=device)
-            
-            chunk_loss = F.mse_loss(gram_chunk, identity_chunk)
-            target_losses.append(chunk_loss)
-        
-        target_loss = torch.stack(target_losses).mean()
-        
-        return (source_loss + target_loss) / 2
+        return (source_loss + target_loss) / (2 * num_chunks)
     
     def get_connection_analysis(self):
         """간소화된 bilinear에 맞춘 연결 분석"""
