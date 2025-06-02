@@ -137,7 +137,7 @@ class ConnectionTransformer(nn.Module):
                         nn.init.orthogonal_(self.W_target[i, j].unsqueeze(0))
     
     def bilinear_transform(self, H_state):
-        """벡터화된 간소화 bilinear transformation"""
+        """메모리 효율적인 간소화 bilinear transformation"""
         batch_size, num_slots, d_model = H_state.shape
         device = H_state.device
         
@@ -148,21 +148,9 @@ class ConnectionTransformer(nn.Module):
         mask = torch.eye(num_slots, device=device, dtype=torch.bool)
         connection_matrix = connection_matrix.masked_fill(mask, 0.0)
         
-        # 벡터화된 영향 계산
-        # H_state: [B, N, D]
-        # connection_matrix: [N, N] where connection_matrix[i,j] = influence from slot i to slot j
-        
-        # H_state를 확장: [B, N, D] -> [B, N, 1, D]
-        H_expanded = H_state.unsqueeze(2)  # [B, N, 1, D]
-        
-        # connection_matrix를 확장: [N, N] -> [1, N, N, 1]
-        connection_expanded = connection_matrix.unsqueeze(0).unsqueeze(-1)  # [1, N, N, 1]
-        
-        # 영향 계산: [B, N, 1, D] * [1, N, N, 1] -> [B, N, N, D]
-        influences = H_expanded * connection_expanded  # [B, N, N, D]
-        
-        # 각 타겟 슬롯에 대해 모든 소스로부터의 영향 합산
-        influence = influences.sum(dim=1)  # [B, N, D]
+        # 메모리 효율적인 방법: einsum 사용
+        # H_state: [B, N, D], connection_matrix: [N, N] -> influence: [B, N, D]
+        influence = torch.einsum('bij,ji->bij', H_state, connection_matrix)
         
         return influence
 
