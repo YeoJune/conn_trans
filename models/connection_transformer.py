@@ -140,24 +140,11 @@ class ConnectionTransformer(nn.Module):
         """
         N=1024+ 대응 메모리 안전 버전
         """
-        batch_size, num_slots, d_model = H_state.shape
         
         connection_matrix = torch.sum(self.W_source * self.W_target, dim=-1)
         connection_matrix.fill_diagonal_(0.0)
         
-        # 배치를 청크로 나누어 처리 (메모리 절약)
-        chunk_size = max(127, min(8, batch_size))  # 배치 청크 크기
-        results = []
-        
-        for start in range(0, batch_size, chunk_size):
-            end = min(start + chunk_size, batch_size)
-            H_chunk = H_state[start:end]  # [chunk_B, N, D]
-            
-            # 작은 청크로 einsum 처리
-            chunk_result = torch.einsum('ij,bid->bjd', connection_matrix, H_chunk)
-            results.append(chunk_result)
-        
-        return torch.cat(results, dim=0)
+        return torch.einsum('ij,bid->bjd', connection_matrix, H_state)
 
     def encode(self, src_input_ids, src_attention_mask=None, return_reasoning_trace=False):
         """
