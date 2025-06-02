@@ -5,47 +5,47 @@ class BaseConfig:
     """
     
     def __init__(self):
-        # 모델 아키텍처 (Attention Is All You Need 기반 조정)
-        self.d_model = 256          # 효율성을 위해 256
-        self.num_slots = 32         # d_model/8
-        self.bilinear_rank = 16     # d_model/16
+        # 모델 아키텍처
+        self.d_model = 256
+        self.num_slots = 32
+        self.bilinear_rank = 16
         self.max_reasoning_steps = 4
         self.num_decoder_layers = 4  # auto_balance()에서 조정됨
-        self.num_heads = 8          # 원논문과 동일
+        self.num_heads = 8
         self.convergence_threshold = 0.01
         
-        # 토크나이저 (기존 유지)
+        # 토크나이저
         self.tokenizer_name = "google-t5/t5-base"
         self.vocab_size = None
         self.pad_token_id = None
         
-        # 시퀀스 길이 (기존보다 증가)
-        self.max_seq_len = 256      # 기존 128 → 256
-        self.answer_max_length = 64 # 기존 32 → 64
+        # 시퀀스 길이
+        self.max_seq_len = 256
+        self.answer_max_length = 64
         
-        # 훈련 설정 (Attention Is All You Need 기반)
+        # 훈련 설정
         self.learning_rate = 1e-4
-        self.batch_size = 32        # 기존 8 → 32
-        self.num_epochs = 3
-        self.dropout = 0.1          # 기존 0.3 → 0.1 (원논문)
-        self.weight_decay = 0.01    # 기존 0.1 → 0.01
+        self.batch_size = 32
+        self.num_epochs = 10
+        self.dropout = 0.1
+        self.weight_decay = 0.01
         
         # 정규화 (원논문 기반)
-        self.orthogonal_weight = 0.01   # 기존 0.1 → 0.01
-        self.label_smoothing = 0.1      # 원논문과 동일
+        self.orthogonal_weight = 0.01
+        self.label_smoothing = 0.1
         self.gradient_clip = 1.0
         
         # 기타 (기존 유지)
         self.bf16 = True
         self.early_stopping_patience = 3
-        self.eval_every = 100       # 기존 50 → 100
+        self.eval_every = 100
         
         # 데이터셋별 설정 (기존 유지)
         self.dataset_name = "unknown"
         self.task_prefix = "answer"
 
     def set_size(self, size):
-        """모델 크기 설정 (기존 메서드 + 값 개선)"""
+        """모델 크기 설정"""
         sizes = {
             "micro": {
                 "d_model": 128, "num_slots": 16, "bilinear_rank": 8,
@@ -59,13 +59,13 @@ class BaseConfig:
             },
             "base": {
                 "d_model": 256, "num_slots": 32, "bilinear_rank": 16,
-                "max_reasoning_steps": 4, "num_decoder_layers": 4, "num_heads": 8,
+                "max_reasoning_steps": 2, "num_decoder_layers": 4, "num_heads": 8,
                 "max_seq_len": 256, "batch_size": 32, "learning_rate": 1e-4
             },
             "large": {
-                "d_model": 384, "num_slots": 48, "bilinear_rank": 24,
-                "max_reasoning_steps": 5, "num_decoder_layers": 6, "num_heads": 12,
-                "max_seq_len": 384, "batch_size": 24, "learning_rate": 5e-5
+                "d_model": 512, "num_slots": 48, "bilinear_rank": 24,
+                "max_reasoning_steps": 2, "num_decoder_layers": 6, "num_heads": 8,
+                "max_seq_len": 512, "batch_size": 24, "learning_rate": 2e-4
             }
         }
         
@@ -76,7 +76,7 @@ class BaseConfig:
         return self
 
     def set_dataset(self, dataset_name, **kwargs):
-        """데이터셋별 설정 (기존 메서드 + 데이터셋 특성 반영)"""
+        """데이터셋별 설정"""
         self.dataset_name = dataset_name
         
         # 데이터셋별 최적화된 기본값
@@ -86,7 +86,7 @@ class BaseConfig:
                 "answer_max_length": 8, 
                 "num_epochs": 5,           # 작은 데이터셋(2.7K)
                 "batch_size": 16,
-                "learning_rate": 2e-4      # 작은 데이터셋엔 높은 lr
+                "learning_rate": 1e-4      # 작은 데이터셋엔 높은 lr
             },
             "logiqa": {
                 "task_prefix": "reason", 
@@ -98,9 +98,8 @@ class BaseConfig:
             "gsm8k": {
                 "task_prefix": "solve", 
                 "answer_max_length": 128,   # 수학 풀이는 길어질 수 있음
-                "num_epochs": 3,
+                "num_epochs": 15,
                 "max_seq_len": 512,        # 수학 문제 설명이 길 수 있음
-                "max_reasoning_steps": 6   # 수학은 더 많은 추론 단계
             },
             "multinli": {
                 "task_prefix": "infer", 

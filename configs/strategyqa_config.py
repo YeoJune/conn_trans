@@ -4,10 +4,4 @@ from .base_config import BaseConfig
 
 def get_config(model_size="micro"):
     """StrategyQA 설정"""
-    return BaseConfig().set_size(model_size).set_dataset(
-        "strategyqa",
-        dropout=0.5,
-        weight_decay=0.3,
-        early_stopping_patience=2,
-        eval_every=20
-    )
+    return BaseConfig().set_size(model_size).set_dataset("strategyqa")
