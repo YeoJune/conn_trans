@@ -107,7 +107,7 @@ def main():
                        required=True,
                        help="Model type to train")
     parser.add_argument("--model_size", 
-                       choices=["nano", "micro", "tiny", "small", "base"], 
+                       choices=["micro", "small", "base", "large"], 
                        default="micro",
                        help="Model size configuration")
     parser.add_argument("--output_dir", 
