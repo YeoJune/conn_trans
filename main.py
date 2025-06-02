@@ -11,7 +11,9 @@ def get_config(dataset_name, model_size):
         "strategyqa": "configs.strategyqa_config",
         "logiqa": "configs.logiqa_config", 
         "gsm8k": "configs.gsm8k_config",
-        "multinli": "configs.multinli_config"
+        "multinli": "configs.multinli_config",
+        "eli5": "configs.eli5_config",
+        "commongen": "configs.commongen_config"
     }
     
     if dataset_name not in config_map:
@@ -101,7 +103,7 @@ def run_automatic_analysis(output_dir):
 def main():
     parser = argparse.ArgumentParser(description="Train Connection Transformer")
     parser.add_argument("--dataset", 
-                       choices=["strategyqa", "logiqa", "gsm8k", "multinli"], 
+                       choices=["strategyqa", "logiqa", "gsm8k", "multinli", "eli5", "commongen"], 
                        required=True,
                        help="Dataset to use")
     parser.add_argument("--model", 

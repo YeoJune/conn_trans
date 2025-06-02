@@ -158,3 +158,25 @@ class BaseConfig:
                 self.bilinear_rank = max(4, int(self.bilinear_rank * target_ratio**0.5))
         
         return self
+    
+    def update_base_config_datasets():
+        """BaseConfig.set_dataset()에 추가할 설정들"""
+        additional_datasets = {
+            "eli5": {
+                "task_prefix": "explain", 
+                "answer_max_length": 200,   # 🔧 적절한 길이
+                "max_seq_len": 320,
+                "num_epochs": 6,
+                "batch_size": 12,           # 🔧 메모리 고려
+                "learning_rate": 8e-5       # 🔧 안정적인 학습률
+            },
+            "commongen": {
+                "task_prefix": "connect", 
+                "answer_max_length": 80,    # 🔧 간결한 생성
+                "max_seq_len": 200,
+                "num_epochs": 10,
+                "batch_size": 32,
+                "learning_rate": 1e-4
+            }
+        }
+        return additional_datasets
