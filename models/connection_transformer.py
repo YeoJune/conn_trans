@@ -337,45 +337,98 @@ class ConnectionTransformer(nn.Module):
         return (source_loss + target_loss) / 2
     
     def get_connection_analysis(self):
-        """Enhanced analysis including orthogonality quality"""
+        """간소화된 bilinear에 맞춘 연결 분석"""
         with torch.no_grad():
-            connection_magnitudes = torch.zeros(self.num_slots, self.num_slots)
+            # 연결 강도 계산: [N, N, r] * [N, N, r] -> [N, N]
+            connection_magnitudes = torch.sum(self.W_source * self.W_target, dim=-1)
+            
+            # 자기 연결 제거 (대각선 0으로)
+            mask = torch.eye(self.num_slots, device=connection_magnitudes.device, dtype=torch.bool)
+            connection_magnitudes = connection_magnitudes.masked_fill(mask, 0.0)
+            
+            # Orthogonality 분석 (벡터들 간의 직교성)
             orthogonality_errors = []
             
-            for i in range(self.num_slots):
-                for j in range(self.num_slots):
-                    if i != j:
-                        # Connection strength
-                        combined = self.W_source[i, j] @ self.W_target[i, j]
-                        magnitude = torch.norm(combined, 'fro').item()
-                        connection_magnitudes[i, j] = magnitude
-                        
-                        # Orthogonality quality for W_source
-                        W_src = self.W_source[i, j]
-                        if W_src.size(0) >= W_src.size(1):
-                            gram = W_src.T @ W_src
-                            identity = torch.eye(W_src.size(1), device=W_src.device)
-                            error = torch.norm(gram - identity, 'fro').item()
-                            orthogonality_errors.append(error)
-                        
-                        # Orthogonality quality for W_target
-                        W_tgt = self.W_target[i, j]
-                        if W_tgt.size(1) >= W_tgt.size(0):
-                            gram = W_tgt @ W_tgt.T
-                            identity = torch.eye(W_tgt.size(0), device=W_tgt.device)
-                            error = torch.norm(gram - identity, 'fro').item()
-                            orthogonality_errors.append(error)
+            # W_source 벡터들의 직교성 분석
+            W_source_valid = self.W_source[~mask]  # [N*(N-1), r] - 자기 연결 제외
+            if W_source_valid.size(0) > 0:
+                # 벡터들 간의 내적 행렬 계산
+                gram_source = W_source_valid @ W_source_valid.T  # [N*(N-1), N*(N-1)]
+                # 대각선은 1이어야 하고, 비대각선은 0에 가까워야 함
+                gram_source.fill_diagonal_(0)  # 대각선 제거하고 비대각선 요소만 확인
+                source_orth_error = torch.norm(gram_source, 'fro').item()
+                orthogonality_errors.append(source_orth_error)
             
+            # W_target 벡터들의 직교성 분석
+            W_target_valid = self.W_target[~mask]  # [N*(N-1), r]
+            if W_target_valid.size(0) > 0:
+                gram_target = W_target_valid @ W_target_valid.T
+                gram_target.fill_diagonal_(0)
+                target_orth_error = torch.norm(gram_target, 'fro').item()
+                orthogonality_errors.append(target_orth_error)
+            
+            # 평균 직교성 오차
             avg_orthogonality_error = sum(orthogonality_errors) / len(orthogonality_errors) if orthogonality_errors else 0.0
+            
+            # 연결 패턴 분석
+            abs_connections = torch.abs(connection_magnitudes)
+            threshold = 0.01
+            
+            # 양수/음수 연결 분석
+            positive_connections = (connection_magnitudes > threshold).sum().item()
+            negative_connections = (connection_magnitudes < -threshold).sum().item()
+            total_possible = self.num_slots * (self.num_slots - 1)  # 자기 연결 제외
+            
+            # 연결 강도 통계
+            non_zero_connections = connection_magnitudes[connection_magnitudes != 0]
             
             return {
                 'connection_matrix': connection_magnitudes,
-                'sparsity_ratio': (connection_magnitudes < 0.01).float().mean().item(),
-                'max_connection': connection_magnitudes.max().item(),
-                'mean_connection': connection_magnitudes.mean().item(),
+                'sparsity_ratio': (abs_connections < threshold).float().mean().item(),
+                'max_connection': abs_connections.max().item(),
+                'min_connection': abs_connections.min().item(),
+                'mean_connection': abs_connections.mean().item(),
+                'std_connection': abs_connections.std().item(),
+                'median_connection': abs_connections.median().item(),
+                
+                # 연결 패턴
+                'positive_connections': positive_connections,
+                'negative_connections': negative_connections,
+                'total_possible_connections': total_possible,
+                'active_connection_ratio': (positive_connections + negative_connections) / total_possible,
+                
+                # 직교성 품질
                 'orthogonality_error': avg_orthogonality_error,
-                'orthogonality_quality': 1.0 / (1.0 + avg_orthogonality_error)
+                'orthogonality_quality': 1.0 / (1.0 + avg_orthogonality_error),
+                
+                # 연결 강도 분포
+                'connection_range': abs_connections.max().item() - abs_connections.min().item(),
+                'connection_entropy': self._calculate_connection_entropy(abs_connections),
+                
+                # 원시 데이터 (디버깅용)
+                'raw_source_weights': self.W_source.clone(),
+                'raw_target_weights': self.W_target.clone()
             }
+
+    def _calculate_connection_entropy(self, connection_strengths):
+        """연결 강도의 엔트로피 계산 (다양성 측정)"""
+        try:
+            # 연결 강도를 확률 분포로 변환
+            abs_strengths = torch.abs(connection_strengths).flatten()
+            abs_strengths = abs_strengths[abs_strengths > 1e-8]  # 0에 가까운 값 제거
+            
+            if len(abs_strengths) == 0:
+                return 0.0
+            
+            # 정규화하여 확률 분포로 만들기
+            probs = abs_strengths / abs_strengths.sum()
+            
+            # 엔트로피 계산: H = -sum(p * log(p))
+            entropy = -(probs * torch.log(probs + 1e-8)).sum().item()
+            
+            return entropy
+        except:
+            return 0.0
     
     def reasoning_cost_loss(self, actual_steps, target_steps=4, weight=0.001):
         """Regularization loss for reasoning efficiency"""
