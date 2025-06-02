@@ -146,7 +146,7 @@ class ConnectionTransformer(nn.Module):
         connection_matrix.fill_diagonal_(0.0)
         
         # 배치를 청크로 나누어 처리 (메모리 절약)
-        chunk_size = max(1, min(8, batch_size))  # 배치 청크 크기
+        chunk_size = max(127, min(8, batch_size))  # 배치 청크 크기
         results = []
         
         for start in range(0, batch_size, chunk_size):
