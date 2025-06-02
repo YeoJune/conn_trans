@@ -51,18 +51,21 @@ def extract_final_answer(text: str, dataset_type: Optional[str] = None) -> str:
     
     elif dataset_type == "gsm8k":
         # 수학 문제 - 숫자 추출
-        # 먼저 전체 텍스트에서 숫자 찾기
-        numbers = re.findall(r'-?\d+(?:\.\d+)?', text)
-        if numbers:
+        # 첫 번째 단어가 숫자인지 확인
+        first_numbers = re.findall(r'^-?\d+(?:\.\d+)?$', first_word)
+        if first_numbers:
             try:
-                # 마지막 숫자를 답으로 간주 (보통 최종 답이 마지막에 있음)
-                return str(float(numbers[-1]))
+                # 정수로 변환 가능하면 정수로, 아니면 실수로
+                num = float(first_numbers[0])
+                if num.is_integer():
+                    return str(int(num))
+                else:
+                    return str(num)
             except ValueError:
                 pass
         
-        # 숫자를 찾지 못한 경우 첫 단어에서 숫자 추출 시도
-        first_numbers = re.findall(r'-?\d+(?:\.\d+)?', first_word)
-        return first_numbers[0] if first_numbers else "0"
+        # 첫 번째 단어가 숫자가 아니면 "0" 반환 (틀린 것으로 간주)
+        return "0"
     
     elif dataset_type == "logiqa":
         # 다중 선택 문제 - A, B, C, D
