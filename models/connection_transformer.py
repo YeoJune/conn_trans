@@ -137,31 +137,18 @@ class ConnectionTransformer(nn.Module):
                         nn.init.orthogonal_(self.W_target[i, j].unsqueeze(0))
     
     def bilinear_transform(self, H_state):
-        """배치를 청크로 나누어 안전하게 처리"""
-        batch_size, num_slots, d_model = H_state.shape
+        # 연결 강도 계산: [N, N, r] * [N, N, r] -> [N, N]
+        connection_matrix = torch.sum(self.W_source * self.W_target, dim=-1)  # [N, N]
         
-        # 연결 강도 계산 (한 번만)
-        connection_matrix = torch.sum(self.W_source * self.W_target, dim=-1)
+        # 자기 연결 제거
         connection_matrix.fill_diagonal_(0.0)
         
-        # 메모리 사용량에 따라 청크 크기 동적 조정
-        available_memory = torch.cuda.get_device_properties(0).total_memory if torch.cuda.is_available() else 8e9
-        tensor_memory = batch_size * num_slots * num_slots * 4  # float32 기준
+        # H_state: [B, N, D], connection_matrix: [N, N]
+        # 원하는 연산: influence[b, j, d] = sum_i(H_state[b, i, d] * connection_matrix[i, j])
+        # 즉, H_state @ connection_matrix
+        influence = H_state @ connection_matrix  # [B, N, D] @ [N, N] -> [B, N, D]
         
-        if tensor_memory > available_memory * 0.3:  # 30% 이상 사용하면 청크 처리
-            chunk_size = max(1, int(available_memory * 0.3 / (num_slots * num_slots * 4)))
-            
-            results = []
-            for i in range(0, batch_size, chunk_size):
-                end_idx = min(i + chunk_size, batch_size)
-                chunk = H_state[i:end_idx]
-                chunk_result = torch.matmul(chunk, connection_matrix.T)
-                results.append(chunk_result)
-            
-            return torch.cat(results, dim=0)
-        else:
-            # 메모리가 충분하면 한 번에 처리
-            return torch.matmul(H_state, connection_matrix.T)
+        return influence
 
 
     def encode(self, src_input_ids, src_attention_mask=None, return_reasoning_trace=False):
