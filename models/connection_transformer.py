@@ -137,19 +137,39 @@ class ConnectionTransformer(nn.Module):
                         nn.init.orthogonal_(self.W_target[i, j].unsqueeze(0))
     
     def bilinear_transform(self, H_state):
+        """청크 단위로 einsum 처리"""
         # 연결 강도 계산: [N, N, r] * [N, N, r] -> [N, N]
         connection_matrix = torch.sum(self.W_source * self.W_target, dim=-1)  # [N, N]
         
         # 자기 연결 제거
         connection_matrix.fill_diagonal_(0.0)
         
-        # H_state: [B, N, D], connection_matrix: [N, N]
-        # 원하는 연산: influence[b, j, d] = sum_i(H_state[b, i, d] * connection_matrix[i, j])
-        # 즉, H_state @ connection_matrix
-        influence = H_state @ connection_matrix  # [B, N, D] @ [N, N] -> [B, N, D]
+        batch_size, num_slots, d_model = H_state.shape
+        
+        # einsum 청크 크기 결정 (제한: 128 미만)
+        chunk_size = min(127, num_slots)  # einsum 제한 고려
+        
+        if num_slots <= 127:
+            # 한 번에 처리 가능
+            influence = torch.einsum('bid,ij->bjd', H_state, connection_matrix)
+        else:
+            # 청크로 나누어 처리
+            influence = torch.zeros_like(H_state)
+            
+            for j_start in range(0, num_slots, chunk_size):
+                j_end = min(j_start + chunk_size, num_slots)
+                
+                # j_start:j_end 슬롯들이 받는 영향 계산
+                # 모든 i 슬롯으로부터의 기여 합산
+                chunk_influence = torch.einsum(
+                    'bid,ij->bjd', 
+                    H_state,  # [B, N, D] - 모든 소스 슬롯
+                    connection_matrix[:, j_start:j_end]  # [N, chunk_size] - 타겟 청크로의 연결
+                )
+                
+                influence[:, j_start:j_end, :] = chunk_influence
         
         return influence
-
 
     def encode(self, src_input_ids, src_attention_mask=None, return_reasoning_trace=False):
         """
