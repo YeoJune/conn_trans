@@ -220,47 +220,60 @@ class BaselineTransformer(nn.Module):
         return torch.tensor(0.0, device=next(self.parameters()).device)
     
     def load_pretrained_weights(self, model_name="google-t5/t5-base"):
-        """T5 pre-trained weights 로딩 (embeddings + output projection)"""
+        """T5 pre-trained weights 로딩 (d_model 크기 안전 처리)"""
         try:
             from transformers import T5Model
             pretrained = T5Model.from_pretrained(model_name)
             
-            # 1. Token embeddings
-            pretrained_embed = pretrained.shared.weight.data
+            # 1. Token embeddings (d_model 차원 처리)
+            pretrained_embed = pretrained.shared.weight.data  # [vocab_size, pretrained_d_model]
             current_vocab_size = self.src_token_embedding.weight.size(0)
+            current_d_model = self.src_token_embedding.weight.size(1)
             pretrained_vocab_size = pretrained_embed.size(0)
+            pretrained_d_model = pretrained_embed.size(1)
             
-            if current_vocab_size == pretrained_vocab_size:
-                self.src_token_embedding.weight.data = pretrained_embed.clone()
-                self.tgt_token_embedding.weight.data = pretrained_embed.clone()
-                print(f"✅ Token embeddings: {current_vocab_size} tokens")
-            else:
+            print(f"🔍 Dimensions: current=({current_vocab_size}, {current_d_model}), pretrained=({pretrained_vocab_size}, {pretrained_d_model})")
+            
+            if current_d_model == pretrained_d_model:
+                # d_model이 같으면 vocab_size만 맞춰서 복사
                 min_vocab_size = min(current_vocab_size, pretrained_vocab_size)
                 self.src_token_embedding.weight.data[:min_vocab_size] = pretrained_embed[:min_vocab_size].clone()
                 self.tgt_token_embedding.weight.data[:min_vocab_size] = pretrained_embed[:min_vocab_size].clone()
-                print(f"✅ Token embeddings: {min_vocab_size}/{current_vocab_size} tokens")
+                print(f"✅ Token embeddings: {min_vocab_size} tokens, d_model={current_d_model}")
+            else:
+                # d_model이 다르면 차원 맞춰서 복사 (작은 쪽까지만)
+                min_vocab_size = min(current_vocab_size, pretrained_vocab_size)
+                min_d_model = min(current_d_model, pretrained_d_model)
+                self.src_token_embedding.weight.data[:min_vocab_size, :min_d_model] = pretrained_embed[:min_vocab_size, :min_d_model].clone()
+                self.tgt_token_embedding.weight.data[:min_vocab_size, :min_d_model] = pretrained_embed[:min_vocab_size, :min_d_model].clone()
+                print(f"✅ Token embeddings: {min_vocab_size} tokens, {min_d_model}/{current_d_model} dimensions")
             
-            # 2. Position embeddings (T5는 relative position이지만 일반적인 position embedding 생성)
-            max_pos = min(self.src_pos_embedding.weight.size(0), 512)  # T5 기본 길이
-            # T5 스타일의 position embedding 초기화 (learned positional encoding처럼)
-            pos_init = torch.randn(max_pos, self.d_model) * 0.02
+            # 2. Position embeddings (T5 스타일, d_model 크기 맞춤)
+            max_pos = min(self.src_pos_embedding.weight.size(0), 512)
+            pos_init = torch.randn(max_pos, current_d_model) * 0.02  # 우리 d_model 크기로
             self.src_pos_embedding.weight.data[:max_pos] = pos_init
             self.tgt_pos_embedding.weight.data[:max_pos] = pos_init
-            print(f"✅ Position embeddings: {max_pos} positions")
+            print(f"✅ Position embeddings: {max_pos} positions, d_model={current_d_model}")
             
-            # 3. Output projection
+            # 3. Output projection (d_model 차원 처리)
             if hasattr(pretrained, 'lm_head'):
-                pretrained_proj = pretrained.lm_head.weight.data
+                pretrained_proj = pretrained.lm_head.weight.data  # [vocab_size, pretrained_d_model]
                 current_vocab_out = self.output_projection.weight.size(0)
+                current_d_model_out = self.output_projection.weight.size(1)
                 pretrained_vocab_out = pretrained_proj.size(0)
+                pretrained_d_model_out = pretrained_proj.size(1)
                 
-                if current_vocab_out == pretrained_vocab_out:
-                    self.output_projection.weight.data = pretrained_proj.clone()
-                    print(f"✅ Output projection: {current_vocab_out} tokens")
-                else:
+                if current_d_model_out == pretrained_d_model_out:
+                    # d_model이 같으면 vocab만 맞춰서
                     min_vocab_out = min(current_vocab_out, pretrained_vocab_out)
                     self.output_projection.weight.data[:min_vocab_out] = pretrained_proj[:min_vocab_out].clone()
-                    print(f"✅ Output projection: {min_vocab_out}/{current_vocab_out} tokens")
+                    print(f"✅ Output projection: {min_vocab_out} tokens, d_model={current_d_model_out}")
+                else:
+                    # d_model이 다르면 둘 다 맞춰서
+                    min_vocab_out = min(current_vocab_out, pretrained_vocab_out)
+                    min_d_model_out = min(current_d_model_out, pretrained_d_model_out)
+                    self.output_projection.weight.data[:min_vocab_out, :min_d_model_out] = pretrained_proj[:min_vocab_out, :min_d_model_out].clone()
+                    print(f"✅ Output projection: {min_vocab_out} tokens, {min_d_model_out}/{current_d_model_out} dimensions")
             
             print(f"🎯 Pre-trained initialization from {model_name} completed")
             return True
