@@ -251,9 +251,8 @@ class Trainer:
                         all_targets.append(str(target_text).strip())
                         
                         # 처음 몇 개만 샘플로 저장 (시각화용)
-                        if len(sample_predictions) < 10:  # 샘플 개수 증가
-                            sample_predictions.append(pred_text.strip())
-                            sample_targets.append(str(target_text).strip())
+                        sample_predictions.append(pred_text.strip())
+                        sample_targets.append(str(target_text).strip())
                 
                 except Exception as e:
                     print(f"⚠️ Eval error: {str(e)[:50]}...")
