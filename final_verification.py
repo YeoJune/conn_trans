@@ -68,7 +68,7 @@ class SystemVerifier:
             from configs.strategyqa_config import get_config
             
             # Test different sizes
-            for size in ["nano", "micro", "tiny", "base"]:
+            for size in ["x-small", "small", "base"]:
                 config = get_config(size)
                 
                 # Verify required attributes
@@ -81,14 +81,6 @@ class SystemVerifier:
                     if not hasattr(config, attr):
                         print(f"   Missing attribute: {attr}")
                         return False
-                
-                # Verify size scaling
-                if size == "nano" and config.d_model != 32:
-                    print(f"   Wrong d_model for nano: {config.d_model}")
-                    return False
-                elif size == "micro" and config.d_model != 64:
-                    print(f"   Wrong d_model for micro: {config.d_model}")
-                    return False
             
             print("   Config system working correctly")
             return True
@@ -177,7 +169,7 @@ class SystemVerifier:
             from configs.strategyqa_config import get_config
             
             # Use smallest config for fast testing
-            config = get_config("nano")
+            config = get_config("x-small")
             
             # Test dataset loading
             tokenizer, train_dataset, eval_dataset = get_tokenizer_and_dataset("strategyqa", config)
@@ -218,7 +210,7 @@ class SystemVerifier:
             from transformers import T5Tokenizer
             
             # Setup
-            config = get_config("nano")
+            config = get_config("x-small")
             tokenizer = T5Tokenizer.from_pretrained("google-t5/t5-base")
             config.vocab_size = tokenizer.vocab_size
             config.pad_token_id = tokenizer.pad_token_id
@@ -302,8 +294,8 @@ class SystemVerifier:
             from dataset.tokenizer_utils import get_tokenizer_and_dataset
             from configs.strategyqa_config import get_config
             
-            # Use nano config for speed
-            config = get_config("nano")
+            # Use x-small config for speed
+            config = get_config("x-small")
             config.num_epochs = 1  # Just one epoch
             config.batch_size = 2  # Small batch
             
@@ -395,7 +387,7 @@ class SystemVerifier:
         if self.tests_passed == self.tests_total:
             print("🎉 All tests PASSED! System is ready.")
             print("\n🚀 You can now run:")
-            print("   python main.py --dataset strategyqa --model connection --model_size nano")
+            print("   python main.py --dataset strategyqa --model connection --model_size x-small")
             return True
         else:
             print(f"❌ {self.tests_total - self.tests_passed} tests FAILED:")

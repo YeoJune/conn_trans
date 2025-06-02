@@ -45,17 +45,7 @@ class BaseConfig:
     def set_size(self, size):
         """모델 크기 설정"""
         sizes = {
-            "nano": {
-                "d_model": 32, "num_slots": 8, "bilinear_rank": 2,
-                "max_reasoning_steps": 1, "num_decoder_layers": 2, "num_heads": 2,
-                "max_seq_len": 96, "batch_size": 4, "learning_rate": 5e-5
-            },
-            "micro": {
-                "d_model": 64, "num_slots": 16, "bilinear_rank": 4,
-                "max_reasoning_steps": 2, "num_decoder_layers": 3, "num_heads": 4,
-                "max_seq_len": 128, "batch_size": 8, "learning_rate": 1e-4
-            },
-            "tiny": {
+            "x-small": {
                 "d_model": 128, "num_slots": 32, "bilinear_rank": 8,
                 "max_reasoning_steps": 3, "num_decoder_layers": 4, "num_heads": 8,
                 "max_seq_len": 256, "batch_size": 12, "learning_rate": 2e-4
