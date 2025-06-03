@@ -127,14 +127,26 @@ class ConnectionTransformer(nn.Module):
         nn.init.orthogonal_(self.output_projection.weight)
     
     def _orthogonal_init_bilinear(self):
-        """간소화된 orthogonal 초기화"""
+        """벡터화된 초기화 - 훨씬 빠름"""
         with torch.no_grad():
-            for i in range(self.num_slots):
-                for j in range(self.num_slots):
-                    if i != j:  # Only non-self connections
-                        # 단순한 orthogonal 초기화
-                        nn.init.orthogonal_(self.W_source[i, j].unsqueeze(0))
-                        nn.init.orthogonal_(self.W_target[i, j].unsqueeze(0))
+            # 자기 연결 마스크
+            mask = torch.eye(self.num_slots, device=self.W_source.device, dtype=torch.bool)
+            
+            # 모든 비대각선 요소를 한번에 초기화
+            # 방법 1: 전체를 랜덤 초기화 후 정규화
+            self.W_source.normal_(0, 1)
+            self.W_target.normal_(0, 1)
+            
+            # 단위벡터로 정규화 (자기 연결 제외)
+            norms_s = torch.norm(self.W_source, dim=-1, keepdim=True)  # [N, N, 1]
+            norms_t = torch.norm(self.W_target, dim=-1, keepdim=True)  # [N, N, 1]
+            
+            self.W_source = self.W_source / (norms_s + 1e-8)
+            self.W_target = self.W_target / (norms_t + 1e-8)
+            
+            # 자기 연결 0으로 설정
+            self.W_source[mask] = 0
+            self.W_target[mask] = 0
     
     def bilinear_transform(self, H_state):
         """
@@ -373,27 +385,19 @@ class ConnectionTransformer(nn.Module):
         return unit_loss + 0.1 * ortho_loss
 
     def get_connection_analysis(self):
-        """
-        스케일러블하면서 의미 보존한 분석
-        """
+        """최적화된 연결 분석"""
         with torch.no_grad():
-            # 연결 강도 계산
+            # 연결 강도 계산 (이건 피할 수 없음)
             connection_magnitudes = torch.sum(self.W_source * self.W_target, dim=-1)
             mask = torch.eye(self.num_slots, device=connection_magnitudes.device, dtype=torch.bool)
             connection_magnitudes = connection_magnitudes.masked_fill(mask, 0.0)
             
-            # 기본 통계
+            # 벡터화된 기본 통계
             abs_connections = torch.abs(connection_magnitudes)
             threshold = 0.01
             
-            positive_connections = (connection_magnitudes > threshold).sum().item()
-            negative_connections = (connection_magnitudes < -threshold).sum().item()
-            total_possible = self.num_slots * (self.num_slots - 1)
-            
-            # 의미를 보존한 직교성 분석
-            orthogonality_info = self._analyze_orthogonality_scalable()
-            
-            return {
+            # 모든 통계를 한번에 계산
+            stats = {
                 'connection_matrix': connection_magnitudes,
                 'sparsity_ratio': (abs_connections < threshold).float().mean().item(),
                 'max_connection': abs_connections.max().item(),
@@ -401,52 +405,66 @@ class ConnectionTransformer(nn.Module):
                 'mean_connection': abs_connections.mean().item(),
                 'std_connection': abs_connections.std().item(),
                 'median_connection': abs_connections.median().item(),
-                
+            }
+            
+            # 연결 패턴 분석
+            positive_connections = (connection_magnitudes > threshold).sum().item()
+            negative_connections = (connection_magnitudes < -threshold).sum().item()
+            total_possible = self.num_slots * (self.num_slots - 1)
+            
+            stats.update({
                 'positive_connections': positive_connections,
                 'negative_connections': negative_connections,
                 'total_possible_connections': total_possible,
                 'active_connection_ratio': (positive_connections + negative_connections) / total_possible,
-                
-                **orthogonality_info,
-                
+            })
+            
+            # 직교성 분석 (최적화된 버전)
+            ortho_info = self._analyze_orthogonality_scalable()
+            stats.update(ortho_info)
+            
+            # 기타 분석
+            stats.update({
                 'connection_range': abs_connections.max().item() - abs_connections.min().item(),
                 'connection_entropy': self._calculate_connection_entropy(abs_connections),
-                
-                'scalability': f'Handles N={self.num_slots} efficiently',
-                'memory_usage': 'O(B*N*D + N²) maximum'
-            }
+                'scalability': f'Optimized for N={self.num_slots}',
+                'memory_usage': 'O(N²) peak memory'
+            })
+            
+            return stats
 
     def _analyze_orthogonality_scalable(self):
-        """
-        벡터화된 빠른 직교성 분석
-        """
+        """완전 벡터화된 직교성 분석"""
         device = self.W_source.device
         mask = torch.eye(self.num_slots, device=device, dtype=torch.bool)
         
-        # 단위벡터 조건 체크 - 벡터화
+        # 단위벡터 조건 - 완전 벡터화
         source_norms = torch.norm(self.W_source, dim=-1)  # [N, N]
         target_norms = torch.norm(self.W_target, dim=-1)  # [N, N]
         
-        # 자기 연결 제외
-        source_unit_errors = torch.abs(source_norms[~mask] - 1.0)
-        target_unit_errors = torch.abs(target_norms[~mask] - 1.0)
+        # 자기 연결 제외하고 단위벡터 오차 계산
+        source_errors = torch.abs(source_norms[~mask] - 1.0)
+        target_errors = torch.abs(target_norms[~mask] - 1.0)
         
-        avg_unit_error = (source_unit_errors.mean() + target_unit_errors.mean()).item() / 2
+        avg_unit_error = (source_errors.mean() + target_errors.mean()).item() / 2
         
-        # 직교성 샘플링 (벡터화 불가능한 부분은 최소화)
-        if self.num_slots > 64:
-            sample_size = min(100, self.num_slots)  # 샘플 크기 줄임
-            ortho_errors = []
+        # 직교성 - 효율적 샘플링만
+        if self.num_slots > 32:
+            # 빠른 샘플링 (GPU에서 실행)
+            sample_size = min(100, self.num_slots)
             
-            # 더 효율적인 샘플링
-            for _ in range(sample_size):
-                i1, j1, i2, j2 = torch.randint(0, self.num_slots, (4,), device=device)
+            # 배치로 랜덤 인덱스 생성
+            rand_indices = torch.randint(0, self.num_slots, (sample_size, 4), device=device)
+            
+            ortho_errors = []
+            for i in range(sample_size):
+                i1, j1, i2, j2 = rand_indices[i]
                 
                 if i1 != j1 and i2 != j2 and (i1 != i2 or j1 != j2):
-                    dot_s = torch.dot(self.W_source[i1, j1], self.W_source[i2, j2]).item()
-                    dot_t = torch.dot(self.W_target[i1, j1], self.W_target[i2, j2]).item()
+                    dot_s = torch.dot(self.W_source[i1, j1], self.W_source[i2, j2])
+                    dot_t = torch.dot(self.W_target[i1, j1], self.W_target[i2, j2])
                     
-                    ortho_errors.extend([abs(dot_s), abs(dot_t)])
+                    ortho_errors.extend([dot_s.abs().item(), dot_t.abs().item()])
             
             avg_ortho_error = sum(ortho_errors) / len(ortho_errors) if ortho_errors else 0.0
         else:
@@ -460,21 +478,31 @@ class ConnectionTransformer(nn.Module):
             'unit_vector_error': avg_unit_error,
             'orthogonal_error': avg_ortho_error
         }
-    
+
     def _calculate_connection_entropy(self, connection_strengths):
-        """연결 강도의 엔트로피 계산 (다양성 측정)"""
+        """빠른 엔트로피 계산"""
         try:
-            # 연결 강도를 확률 분포로 변환
-            abs_strengths = torch.abs(connection_strengths).flatten()
-            abs_strengths = abs_strengths[abs_strengths > 1e-8]  # 0에 가까운 값 제거
+            # 큰 텐서는 샘플링
+            total_elements = connection_strengths.numel()
+            
+            if total_elements > 100000:
+                # 샘플링으로 근사
+                flat = connection_strengths.view(-1)
+                sample_size = 10000
+                indices = torch.randperm(total_elements, device=flat.device)[:sample_size]
+                abs_strengths = torch.abs(flat[indices])
+            else:
+                # 작은 경우는 전체 계산
+                abs_strengths = torch.abs(connection_strengths).view(-1)
+            
+            # 0에 가까운 값 제거
+            abs_strengths = abs_strengths[abs_strengths > 1e-8]
             
             if len(abs_strengths) == 0:
                 return 0.0
             
-            # 정규화하여 확률 분포로 만들기
+            # 엔트로피 계산
             probs = abs_strengths / abs_strengths.sum()
-            
-            # 엔트로피 계산: H = -sum(p * log(p))
             entropy = -(probs * torch.log(probs + 1e-8)).sum().item()
             
             return entropy
