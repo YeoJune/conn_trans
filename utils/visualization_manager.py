@@ -105,7 +105,7 @@ class VisualizationManager:
                     vmin=-abs_max, 
                     vmax=abs_max,
                     square=True,
-                    linewidths=0.5,  # 얇은 격자선
+                    linewidths=0,  # 선 간격 제거
                     linecolor='white',
                     cbar_kws={
                         'shrink': 0.8,
