@@ -27,7 +27,7 @@ def get_config(dataset_name, model_size):
         config.dataset_name = dataset_name
         config.model_size = model_size
 
-        config.auto_balance() # 자동 균형 조정
+        #config.auto_balance() # 자동 균형 조정
         
         return config
     except ImportError as e:

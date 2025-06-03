@@ -12,7 +12,7 @@ class BaseConfig:
         self.max_reasoning_steps = 4
         self.num_decoder_layers = 4  # auto_balance()에서 조정됨
         self.num_heads = 8
-        self.convergence_threshold = 0.01
+        self.convergence_threshold = 10
         
         # 토크나이저
         self.tokenizer_name = "google-t5/t5-base"
@@ -48,24 +48,24 @@ class BaseConfig:
         """모델 크기 설정"""
         sizes = {
             "micro": {
-                "d_model": 128, "num_slots": 16, "bilinear_rank": 8,
-                "max_reasoning_steps": 3, "num_decoder_layers": 3, "num_heads": 4,
-                "max_seq_len": 128, "batch_size": 64, "learning_rate": 3e-4
+                "d_model": 128, "num_slots": 128, "bilinear_rank": 1,
+                "max_reasoning_steps": 1, "num_decoder_layers": 4, "num_heads": 4,
+                "max_seq_len": 128, "batch_size": 64, "learning_rate": 2e-4
             },
             "small": {
-                "d_model": 192, "num_slots": 24, "bilinear_rank": 12,
-                "max_reasoning_steps": 3, "num_decoder_layers": 4, "num_heads": 6,
+                "d_model": 256, "num_slots": 256, "bilinear_rank": 1,
+                "max_reasoning_steps": 1, "num_decoder_layers": 5, "num_heads": 6,
                 "max_seq_len": 256, "batch_size": 48, "learning_rate": 2e-4
             },
             "base": {
-                "d_model": 256, "num_slots": 32, "bilinear_rank": 16,
-                "max_reasoning_steps": 2, "num_decoder_layers": 4, "num_heads": 8,
+                "d_model": 512, "num_slots": 512, "bilinear_rank": 1,
+                "max_reasoning_steps": 1, "num_decoder_layers": 6, "num_heads": 8,
                 "max_seq_len": 256, "batch_size": 32, "learning_rate": 1e-4
             },
             "large": {
-                "d_model": 512, "num_slots": 48, "bilinear_rank": 24,
-                "max_reasoning_steps": 2, "num_decoder_layers": 6, "num_heads": 8,
-                "max_seq_len": 512, "batch_size": 24, "learning_rate": 2e-4
+                "d_model": 768, "num_slots": 768, "bilinear_rank": 1,
+                "max_reasoning_steps": 1, "num_decoder_layers": 6, "num_heads": 8,
+                "max_seq_len": 256, "batch_size": 24, "learning_rate": 1e-4
             }
         }
         
@@ -104,7 +104,7 @@ class BaseConfig:
             "multinli": {
                 "task_prefix": "infer", 
                 "answer_max_length": 16, 
-                "num_epochs": 2,           # 큰 데이터셋(433K)
+                "num_epochs": 12,           # 큰 데이터셋(433K)
                 "batch_size": 64,
                 "learning_rate": 5e-5,     # 큰 데이터셋엔 낮은 lr
                 "early_stopping_patience": 2
