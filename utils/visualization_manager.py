@@ -1,4 +1,5 @@
 # utils/visualization_manager.py
+import torch
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
