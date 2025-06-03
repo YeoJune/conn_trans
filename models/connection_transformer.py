@@ -127,26 +127,25 @@ class ConnectionTransformer(nn.Module):
         nn.init.orthogonal_(self.output_projection.weight)
     
     def _orthogonal_init_bilinear(self):
-        """벡터화된 초기화 - 훨씬 빠름"""
+        """벡터화된 초기화"""
         with torch.no_grad():
             # 자기 연결 마스크
             mask = torch.eye(self.num_slots, device=self.W_source.device, dtype=torch.bool)
             
             # 모든 비대각선 요소를 한번에 초기화
-            # 방법 1: 전체를 랜덤 초기화 후 정규화
-            self.W_source.normal_(0, 1)
-            self.W_target.normal_(0, 1)
+            self.W_source.data.normal_(0, 1)
+            self.W_target.data.normal_(0, 1)
             
             # 단위벡터로 정규화 (자기 연결 제외)
-            norms_s = torch.norm(self.W_source, dim=-1, keepdim=True)  # [N, N, 1]
-            norms_t = torch.norm(self.W_target, dim=-1, keepdim=True)  # [N, N, 1]
+            norms_s = torch.norm(self.W_source.data, dim=-1, keepdim=True)  # [N, N, 1]
+            norms_t = torch.norm(self.W_target.data, dim=-1, keepdim=True)  # [N, N, 1]
             
-            self.W_source = self.W_source / (norms_s + 1e-8)
-            self.W_target = self.W_target / (norms_t + 1e-8)
+            self.W_source.data = self.W_source.data / (norms_s + 1e-8)
+            self.W_target.data = self.W_target.data / (norms_t + 1e-8)
             
             # 자기 연결 0으로 설정
-            self.W_source[mask] = 0
-            self.W_target[mask] = 0
+            self.W_source.data[mask] = 0
+            self.W_target.data[mask] = 0
     
     def bilinear_transform(self, H_state):
         """
