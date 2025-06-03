@@ -69,7 +69,7 @@ python analyze_results.py --output_dir ./outputs
 
 | Size  | d_model | num_slots | bilinear_rank | decoder_layers | Use Case             |
 | ----- | ------- | --------- | ------------- | -------------- | -------------------- |
-| micro | 128     | 2048      | 1             | 4              | Quick experiments    |
+| micro | 128     | 128       | 1             | 4              | Quick experiments    |
 | small | 256     | 256       | 1             | 5              | Medium datasets      |
 | base  | 512     | 512       | 1             | 6              | Large datasets       |
 | large | 768     | 768       | 1             | 6              | Research experiments |
