@@ -87,17 +87,14 @@ python analyze_results.py --output_dir ./outputs
 | ---------- | ---------- | -------- | ----------- | ------------- |
 | StrategyQA | 0.5153     | 0.5488   | -3.35pp     | ❌ Baseline   |
 | MultiNLI   | 0.5971     | 0.5881   | +0.90pp     | ✅ Connection |
-| LogiQA     | 0.4028     | 0.2412   | +16.16pp    | ✅ Connection |
 | GSM8K      | 0.0324     | 0.0347   | -0.23pp     | ❌ Baseline   |
 | ELI5       | 0.0065     | 0.0126   | -0.61pp     | ❌ Baseline   |
 | CommonGen  | 0.3629     | 0.3604   | +0.25pp     | ✅ Connection |
 
 **Summary:**
 
-- **Connection wins: 3/6 datasets (50%)**
-- **Notable strength**: Logic reasoning (LogiQA +16.16pp improvement)
+- **Connection wins: 2/5 datasets (40%)**
 - **Parameter efficiency**: Connection uses 23% fewer parameters
-- **Best performance**: LogiQA reasoning tasks show clear advantage
 
 ### Accuracy Calculation Methods
 
