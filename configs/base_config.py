@@ -48,13 +48,13 @@ class BaseConfig:
         """모델 크기 설정"""
         sizes = {
             "micro": {
-                "d_model": 128, "num_slots": 128, "bilinear_rank": 1,
+                "d_model": 128, "num_slots": 2048, "bilinear_rank": 1,
                 "max_reasoning_steps": 1, "num_decoder_layers": 4, "num_heads": 4,
                 "max_seq_len": 128, "batch_size": 64, "learning_rate": 2e-4
             },
             "small": {
                 "d_model": 256, "num_slots": 256, "bilinear_rank": 1,
-                "max_reasoning_steps": 1, "num_decoder_layers": 5, "num_heads": 6,
+                "max_reasoning_steps": 1, "num_decoder_layers": 5, "num_heads": 4,
                 "max_seq_len": 256, "batch_size": 48, "learning_rate": 2e-4
             },
             "base": {
