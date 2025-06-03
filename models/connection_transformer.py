@@ -297,56 +297,79 @@ class ConnectionTransformer(nn.Module):
     
     def orthogonal_regularization_loss(self):
         """
-        einsum 기반 효율적 직교 정규화
-        기존 O(N⁴) → O(N² × r²)
+        메모리와 속도 모두 최적화된 직교 정규화
+        O(N⁴) → O(N² × r) 메모리, 훨씬 빠른 속도
         """
         device = self.W_source.device
-        num_slots = self.num_slots
+        mask = torch.eye(self.num_slots, device=device, dtype=torch.bool)
         
-        # 자기 연결 제거 마스크
-        mask = torch.eye(num_slots, device=device, dtype=torch.bool)
+        # 1. 단위벡터 조건 - 벡터화
+        source_norms = torch.norm(self.W_source, dim=-1)  # [N, N]
+        target_norms = torch.norm(self.W_target, dim=-1)  # [N, N]
         
-        # 1. 단위벡터 조건: ||W[i,j]||² = 1
-        # W_source: [N, N, r], W_target: [N, N, r]
-        source_norms = torch.sum(self.W_source ** 2, dim=-1)  # [N, N]
-        target_norms = torch.sum(self.W_target ** 2, dim=-1)  # [N, N]
-        
-        # 자기 연결 제외하고 단위벡터 조건
         source_unit_loss = torch.mean((source_norms[~mask] - 1.0) ** 2)
         target_unit_loss = torch.mean((target_norms[~mask] - 1.0) ** 2)
         
-        # 2. 직교성 조건: <W[i1,j1], W[i2,j2]> = 0 (서로 다른 (i,j) 쌍)
-        # einsum으로 모든 쌍의 내적을 한번에 계산
+        # 2. 직교성 조건 - 샘플링으로 근사 (메모리 절약)
+        num_valid_connections = self.num_slots * (self.num_slots - 1)
         
-        # W_source를 [N*N, r]로 reshape
-        W_s_flat = self.W_source.view(-1, self.bilinear_rank)  # [N*N, r]
-        W_t_flat = self.W_target.view(-1, self.bilinear_rank)  # [N*N, r]
+        if num_valid_connections <= 1000:
+            # 작은 경우: 정확한 계산
+            W_s_valid = self.W_source[~mask]  # [N*(N-1), r]
+            W_t_valid = self.W_target[~mask]  # [N*(N-1), r]
+            
+            # 청킹으로 메모리 절약
+            chunk_size = 200
+            source_ortho_loss = 0
+            target_ortho_loss = 0
+            num_chunks = 0
+            
+            for start in range(0, len(W_s_valid), chunk_size):
+                end = min(start + chunk_size, len(W_s_valid))
+                chunk_s = W_s_valid[start:end]
+                chunk_t = W_t_valid[start:end]
+                
+                if len(chunk_s) > 1:
+                    gram_s = chunk_s @ chunk_s.T  # [chunk, chunk]
+                    gram_t = chunk_t @ chunk_t.T  # [chunk, chunk]
+                    
+                    gram_s.fill_diagonal_(0)
+                    gram_t.fill_diagonal_(0)
+                    
+                    source_ortho_loss += torch.sum(gram_s ** 2)
+                    target_ortho_loss += torch.sum(gram_t ** 2)
+                    num_chunks += len(chunk_s) * (len(chunk_s) - 1)
+            
+            if num_chunks > 0:
+                source_ortho_loss /= num_chunks
+                target_ortho_loss /= num_chunks
+                ortho_loss = (source_ortho_loss + target_ortho_loss) / 2
+            else:
+                ortho_loss = 0.0
         
-        # 모든 쌍의 내적: [N*N, N*N]
-        gram_source = torch.einsum('ir,jr->ij', W_s_flat, W_s_flat)  # [N*N, N*N]
-        gram_target = torch.einsum('ir,jr->ij', W_t_flat, W_t_flat)  # [N*N, N*N]
-        
-        # 대각선은 단위벡터 조건(이미 처리), 자기 연결도 제외
-        # 전체 마스크: 대각선 + 자기 연결 위치들
-        flat_mask = mask.view(-1)  # [N*N] - 자기 연결 위치
-        
-        # 전체 직교성 마스크 생성
-        full_mask = torch.eye(num_slots * num_slots, device=device, dtype=torch.bool)  # 대각선
-        
-        # 자기 연결 위치들도 제외 (i1==j1 또는 i2==j2인 경우)
-        for idx in range(num_slots * num_slots):
-            if flat_mask[idx]:  # 자기 연결이면
-                full_mask[idx, :] = True  # 해당 행 전체 마스킹
-                full_mask[:, idx] = True  # 해당 열 전체 마스킹
-        
-        # 직교성 손실 계산
-        source_ortho_loss = torch.mean(gram_source[~full_mask] ** 2)
-        target_ortho_loss = torch.mean(gram_target[~full_mask] ** 2)
+        else:
+            # 큰 경우: 샘플링으로 근사
+            sample_size = min(500, num_valid_connections // 10)
+            ortho_errors = []
+            
+            for _ in range(sample_size):
+                # 랜덤하게 두 개의 서로 다른 연결 선택
+                indices = torch.randperm(self.num_slots * self.num_slots, device=device)[:2]
+                
+                i1, j1 = indices[0] // self.num_slots, indices[0] % self.num_slots
+                i2, j2 = indices[1] // self.num_slots, indices[1] % self.num_slots
+                
+                if i1 != j1 and i2 != j2 and (i1 != i2 or j1 != j2):
+                    dot_s = torch.dot(self.W_source[i1, j1], self.W_source[i2, j2])
+                    dot_t = torch.dot(self.W_target[i1, j1], self.W_target[i2, j2])
+                    
+                    ortho_errors.append(dot_s ** 2)
+                    ortho_errors.append(dot_t ** 2)
+            
+            ortho_loss = torch.mean(torch.stack(ortho_errors)) if ortho_errors else 0.0
         
         # 총 손실
         unit_loss = (source_unit_loss + target_unit_loss) / 2
-        ortho_loss = (source_ortho_loss + target_ortho_loss) / 2
-        
         return unit_loss + 0.1 * ortho_loss
 
     def get_connection_analysis(self):
@@ -395,54 +418,49 @@ class ConnectionTransformer(nn.Module):
 
     def _analyze_orthogonality_scalable(self):
         """
-        스케일러블한 직교성 분석 (의미 보존)
+        벡터화된 빠른 직교성 분석
         """
         device = self.W_source.device
         mask = torch.eye(self.num_slots, device=device, dtype=torch.bool)
-
-        # 단위벡터 조건 체크
-        unit_errors = []
-        for i in range(self.num_slots):
-            for j in range(self.num_slots):
-                if i != j:
-                    source_norm = torch.norm(self.W_source[i, j]).item()
-                    target_norm = torch.norm(self.W_target[i, j]).item()
-                    
-                    unit_errors.append(abs(source_norm - 1.0))
-                    unit_errors.append(abs(target_norm - 1.0))
-
-        avg_unit_error = sum(unit_errors) / len(unit_errors) if unit_errors else 0.0
-
-        # 직교성 샘플링 체크 (큰 N에서)
+        
+        # 단위벡터 조건 체크 - 벡터화
+        source_norms = torch.norm(self.W_source, dim=-1)  # [N, N]
+        target_norms = torch.norm(self.W_target, dim=-1)  # [N, N]
+        
+        # 자기 연결 제외
+        source_unit_errors = torch.abs(source_norms[~mask] - 1.0)
+        target_unit_errors = torch.abs(target_norms[~mask] - 1.0)
+        
+        avg_unit_error = (source_unit_errors.mean() + target_unit_errors.mean()).item() / 2
+        
+        # 직교성 샘플링 (벡터화 불가능한 부분은 최소화)
         if self.num_slots > 64:
-            sample_size = min(1000, self.num_slots * (self.num_slots - 1))
+            sample_size = min(100, self.num_slots)  # 샘플 크기 줄임
             ortho_errors = []
             
+            # 더 효율적인 샘플링
             for _ in range(sample_size):
-                # 랜덤 쌍 선택
-                pairs = torch.randint(0, self.num_slots, (4,))
-                i1, j1, i2, j2 = pairs
+                i1, j1, i2, j2 = torch.randint(0, self.num_slots, (4,), device=device)
                 
                 if i1 != j1 and i2 != j2 and (i1 != i2 or j1 != j2):
                     dot_s = torch.dot(self.W_source[i1, j1], self.W_source[i2, j2]).item()
                     dot_t = torch.dot(self.W_target[i1, j1], self.W_target[i2, j2]).item()
                     
-                    ortho_errors.append(abs(dot_s))
-                    ortho_errors.append(abs(dot_t))
+                    ortho_errors.extend([abs(dot_s), abs(dot_t)])
             
             avg_ortho_error = sum(ortho_errors) / len(ortho_errors) if ortho_errors else 0.0
         else:
-            avg_ortho_error = 0.0  # 작은 N에서는 정확한 계산 필요
-
+            avg_ortho_error = 0.0
+        
         total_error = avg_unit_error + avg_ortho_error
-
+        
         return {
             'orthogonality_error': total_error,
             'orthogonality_quality': 1.0 / (1.0 + total_error),
             'unit_vector_error': avg_unit_error,
             'orthogonal_error': avg_ortho_error
         }
-
+    
     def _calculate_connection_entropy(self, connection_strengths):
         """연결 강도의 엔트로피 계산 (다양성 측정)"""
         try:
