@@ -75,100 +75,128 @@ class VisualizationManager:
         plt.close()
         
         print(f"📈 학습 곡선 저장: {save_path.name}")
+        
     def plot_connection_matrix(self, model):
-        """연결 행렬 시각화 - 간소화된 Connection Transformer 전용"""
+        """연결 행렬 시각화 - 더 직관적이고 명확한 버전"""
         if not hasattr(model, 'W_source') or not hasattr(model, 'W_target'):
             return
         
         try:
-            # 간소화된 bilinear에서 직접 연결 행렬 계산
+            # 연결 행렬 계산
             with torch.no_grad():
-                # 연결 강도 계산: [N, N, r] * [N, N, r] -> [N, N]
                 connection_matrix = torch.sum(model.W_source * model.W_target, dim=-1)
-                
-                # 자기 연결 제거 (대각선 0으로)
                 num_slots = connection_matrix.size(0)
                 mask = torch.eye(num_slots, device=connection_matrix.device, dtype=torch.bool)
                 connection_matrix = connection_matrix.masked_fill(mask, 0.0)
-                
                 matrix_np = connection_matrix.cpu().numpy()
             
-            plt.figure(figsize=(10, 8))
+            # 더 큰 그림으로 설정
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
             
-            # 히트맵 생성 - 더 세밀한 컬러맵
-            im = sns.heatmap(matrix_np, 
+            # 1. 메인 연결 행렬 히트맵 - 색상을 꽉 차게!
+            # 값이 작더라도 색상이 꽉 차도록 percentile 기반 정규화
+            non_zero_values = matrix_np[matrix_np != 0]
+            if len(non_zero_values) > 0:
+                # 상위/하위 5% 기준으로 색상 범위 설정 (더 극적인 색상)
+                vmax = np.percentile(np.abs(non_zero_values), 95)
+                vmin = -vmax
+            else:
+                vmax = np.abs(matrix_np).max()
+                vmin = -vmax
+            
+            # 만약 범위가 너무 작으면 강제로 확장
+            if vmax < 0.01:
+                vmax = 0.01
+                vmin = -0.01
+                
+            im1 = ax1.imshow(matrix_np, 
                             cmap='RdBu_r', 
-                            center=0, 
-                            square=True,
-                            cbar_kws={'label': 'Connection Strength'},
-                            fmt='.3f',
-                            linewidths=0.1,
-                            linecolor='gray')
+                            interpolation='nearest',
+                            aspect='equal',
+                            vmin=vmin,
+                            vmax=vmax)
             
-            plt.title('Slot-to-Slot Connection Matrix\n(Red: Positive Influence, Blue: Negative Influence)', 
-                    fontsize=14, fontweight='bold')
-            plt.xlabel('Target Slot', fontsize=12)
-            plt.ylabel('Source Slot', fontsize=12)
+            # 셀 전체를 색으로 꽉 채우기 - 격자선 없애기
+            ax1.set_xticks(np.arange(num_slots) + 0.5, minor=True)
+            ax1.set_yticks(np.arange(num_slots) + 0.5, minor=True)
+            ax1.set_xticks(range(num_slots))
+            ax1.set_yticks(range(num_slots))
+            ax1.set_xticklabels(range(num_slots))
+            ax1.set_yticklabels(range(num_slots))
+            # 격자선 제거하여 색상이 꽉 차게
             
-            # 통계 정보 계산 및 표시
-            abs_matrix = np.abs(matrix_np)
-            sparsity_ratio = (abs_matrix < 0.1).mean()  # 작은 값들의 비율
-            max_connection = abs_matrix.max()
-            mean_connection = abs_matrix.mean()
-            std_connection = abs_matrix.std()
+            # 강한 연결에만 값 표시 (threshold 적용)
+            threshold = np.abs(matrix_np).max() * 0.3  # 최대값의 30% 이상만 표시
+            for i in range(num_slots):
+                for j in range(num_slots):
+                    if abs(matrix_np[i, j]) > threshold:
+                        color = 'white' if abs(matrix_np[i, j]) > np.abs(matrix_np).max() * 0.6 else 'black'
+                        ax1.text(j, i, f'{matrix_np[i, j]:.2f}',
+                                ha='center', va='center',
+                                color=color, fontweight='bold', fontsize=10)
             
-            # 연결 분포 정보
-            positive_connections = (matrix_np > 0.01).sum()
-            negative_connections = (matrix_np < -0.01).sum()
-            total_possible = num_slots * (num_slots - 1)  # 자기 연결 제외
+            ax1.set_title('Slot-to-Slot Connection Matrix\n(빨강: 양의 영향, 파랑: 음의 영향)', 
+                        fontsize=14, fontweight='bold', pad=20)
+            ax1.set_xlabel('Target Slot →', fontsize=12, fontweight='bold')
+            ax1.set_ylabel('Source Slot ↓', fontsize=12, fontweight='bold')
             
-            stats_text = (f'Sparsity: {sparsity_ratio:.3f} | Max: {max_connection:.3f} | Mean: {mean_connection:.3f}\n'
-                        f'Positive: {positive_connections}/{total_possible} | '
-                        f'Negative: {negative_connections}/{total_possible} | '
-                        f'Std: {std_connection:.3f}')
+            # 컬러바 추가
+            cbar1 = plt.colorbar(im1, ax=ax1, shrink=0.8)
+            cbar1.set_label('Connection Strength', fontsize=12, fontweight='bold')
             
-            plt.figtext(0.02, 0.02, stats_text, 
-                    fontsize=10, style='italic',
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="wheat", alpha=0.7))
+            # 2. 간단한 연결 분포 막대 그래프
+            flat_connections = matrix_np[matrix_np != 0]
             
-            # 연결 강도 분포 히스토그램도 함께 저장
-            plt.figure(figsize=(8, 4))
-            flat_connections = matrix_np[matrix_np != 0]  # 0이 아닌 연결만
+            # 양수/음수 연결 개수
+            positive_count = (matrix_np > 0.01).sum()
+            negative_count = (matrix_np < -0.01).sum()
+            weak_count = ((matrix_np >= -0.01) & (matrix_np <= 0.01) & (matrix_np != 0)).sum()
             
-            plt.subplot(1, 2, 1)
-            plt.hist(flat_connections, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
-            plt.xlabel('Connection Strength')
-            plt.ylabel('Frequency')
-            plt.title('Connection Strength Distribution')
-            plt.grid(True, alpha=0.3)
+            categories = ['Strong\nPositive\n(>0.01)', 'Weak\n(-0.01~0.01)', 'Strong\nNegative\n(<-0.01)']
+            counts = [positive_count, weak_count, negative_count]
+            colors = ['#d62728', '#ff7f0e', '#2ca02c']  # 빨강, 주황, 초록
             
-            plt.subplot(1, 2, 2)
-            plt.hist(np.abs(flat_connections), bins=30, alpha=0.7, color='orange', edgecolor='black')
-            plt.xlabel('|Connection Strength|')
-            plt.ylabel('Frequency')
-            plt.title('Absolute Connection Strength')
-            plt.grid(True, alpha=0.3)
+            bars = ax2.bar(categories, counts, color=colors, alpha=0.8, edgecolor='black', linewidth=2)
+            ax2.set_title('Connection Distribution', fontsize=14, fontweight='bold')
+            ax2.set_ylabel('Number of Connections', fontsize=12, fontweight='bold')
+            ax2.grid(True, axis='y', alpha=0.3)
+            
+            # 막대 위에 값 표시
+            for bar, count in zip(bars, counts):
+                height = bar.get_height()
+                ax2.text(bar.get_x() + bar.get_width()/2., height + 0.5,
+                        f'{count}', ha='center', va='bottom', fontweight='bold', fontsize=11)
+            
+            # 전체 통계 정보
+            total_possible = num_slots * (num_slots - 1)
+            active_connections = positive_count + negative_count + weak_count
+            sparsity = 1 - (active_connections / total_possible)
+            
+            stats_text = (f'Total Slots: {num_slots}×{num_slots} | '
+                        f'Active Connections: {active_connections}/{total_possible} ({active_connections/total_possible*100:.1f}%)\n'
+                        f'Max Strength: {np.abs(matrix_np).max():.3f} | '
+                        f'Sparsity: {sparsity:.3f} | '
+                        f'Std: {matrix_np.std():.3f}')
+            
+            fig.suptitle('Connection Matrix Analysis', fontsize=16, fontweight='bold', y=0.95)
+            fig.text(0.5, 0.02, stats_text, ha='center', fontsize=11, style='italic',
+                    bbox=dict(boxstyle="round,pad=0.5", facecolor="lightblue", alpha=0.8))
             
             plt.tight_layout()
+            plt.subplots_adjust(top=0.85, bottom=0.15)
             
             # 파일 저장
-            matrix_save_path = self.output_dir / 'connection_matrix.png'
-            plt.figure(1)  # 첫 번째 그림으로 돌아가기
-            plt.savefig(matrix_save_path, dpi=300, bbox_inches='tight')
+            save_path = self.output_dir / 'connection_matrix_improved.png'
+            plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
             plt.close()
             
-            dist_save_path = self.output_dir / 'connection_distribution.png'
-            plt.figure(2)  # 두 번째 그림
-            plt.savefig(dist_save_path, dpi=300, bbox_inches='tight')
-            plt.close()
-            
-            print(f"🔗 연결 행렬 저장: {matrix_save_path.name}")
-            print(f"📊 연결 분포 저장: {dist_save_path.name}")
-            print(f"   📈 활성 연결: {positive_connections + negative_connections}/{total_possible} "
-                f"({(positive_connections + negative_connections)/total_possible*100:.1f}%)")
+            print(f"🔗 개선된 연결 행렬 저장: {save_path.name}")
+            print(f"   📊 활성 연결: {active_connections}/{total_possible} ({active_connections/total_possible*100:.1f}%)")
+            print(f"   💪 강한 연결: {positive_count + negative_count} | 약한 연결: {weak_count}")
+            print(f"   🎯 최대 연결 강도: {np.abs(matrix_np).max():.3f}")
             
         except Exception as e:
-            print(f"⚠️ 연결 행렬 시각화 실패: {str(e)[:50]}...")
+            print(f"⚠️ 연결 행렬 시각화 실패: {str(e)}")
             import traceback
             traceback.print_exc()
     
