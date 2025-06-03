@@ -86,12 +86,21 @@ class ComparisonAnalyzer:
             config = exp['config']
             summary = exp['summary']
             
+            # 파라미터 수 추출 (여러 가능한 필드 확인)
+            total_params = (
+                summary.get('total_parameters') or 
+                summary.get('model_parameters') or 
+                config.get('total_parameters') or 
+                'N/A'
+            )
+            
             row = {
                 'Experiment_ID': exp['folder'],
                 'Model': config.get('model_type', 'unknown').title(),
                 'Dataset': config.get('dataset', 'unknown').upper(),
                 'Size': config.get('model_size', 'unknown'),
                 'Accuracy': summary.get('best_accuracy', 0.0),
+                'Parameters': total_params,
                 'd_model': config.get('d_model', 'N/A'),
                 'Batch_Size': config.get('batch_size', 'N/A'),
                 'Learning_Rate': config.get('learning_rate', 'N/A'),
@@ -139,6 +148,55 @@ class ComparisonAnalyzer:
         
         # 3. 모델 크기별 성능
         self._plot_size_analysis(df)
+        
+        # 4. 파라미터 수 vs 성능
+        self._plot_parameters_vs_performance(df)
+    
+    def _plot_parameters_vs_performance(self, df: pd.DataFrame):
+        """파라미터 수 vs 성능 분석"""
+        # 숫자 변환 가능한 파라미터 수만 필터링
+        numeric_df = df[df['Parameters'] != 'N/A'].copy()
+        
+        if len(numeric_df) < 2:
+            return
+        
+        try:
+            # 파라미터 수를 숫자로 변환
+            numeric_df['Parameters_Num'] = pd.to_numeric(numeric_df['Parameters'])
+            
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            for model in numeric_df['Model'].unique():
+                model_data = numeric_df[numeric_df['Model'] == model]
+                color = '#3498db' if model == 'Connection' else '#e74c3c'
+                
+                ax.scatter(model_data['Parameters_Num'], model_data['Accuracy'], 
+                          label=model, alpha=0.7, s=80, color=color)
+                
+                # 데이터포인트에 데이터셋 이름 표시
+                for _, row in model_data.iterrows():
+                    ax.annotate(row['Dataset'], 
+                               (row['Parameters_Num'], row['Accuracy']),
+                               xytext=(5, 5), textcoords='offset points',
+                               fontsize=8, alpha=0.7)
+            
+            ax.set_xlabel('Model Parameters')
+            ax.set_ylabel('Accuracy')
+            ax.set_title('Accuracy vs Model Parameters')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            
+            # x축을 로그 스케일로 (파라미터 수가 클 수 있음)
+            ax.set_xscale('log')
+            
+            plt.tight_layout()
+            plt.savefig(self.comparison_dir / 'parameters_analysis.png', dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"📊 파라미터 분석 차트 저장")
+            
+        except Exception as e:
+            print(f"⚠️ 파라미터 분석 실패: {str(e)[:50]}...")
     
     def _plot_dataset_performance(self, df: pd.DataFrame):
         """데이터셋별 성능 비교 차트"""
@@ -291,6 +349,7 @@ class ComparisonAnalyzer:
                     f.write(f"### {dataset}\n")
                     f.write(f"- **최고 성능**: {best_row['Accuracy']:.4f}\n")
                     f.write(f"- **모델**: {best_row['Model']}\n")
+                    f.write(f"- **파라미터 수**: {best_row['Parameters']}\n")
                     f.write(f"- **실험 ID**: `{best_row['Experiment_ID']}`\n\n")
             
             # Connection vs Baseline 비교

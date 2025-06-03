@@ -7,25 +7,23 @@ A novel Transformer architecture with **bilinear slot-to-slot connections** for 
 ### Core Innovation: Bilinear Connections
 
 ```
-Input Tokens → Semantic Slots → Bilinear Reasoning → Output Tokens
-                     ↓
-              Slot-to-Slot Connections
-           W_source @ H_i @ W_target → H_j
+Source Sequence → Encoder → Semantic Slots ← Bilinear Reasoning → Decoder → Target Sequence
+                            [B,N,D]         W_source ⊙ W_target
 ```
 
 **Key Features:**
 
 - **Semantic Slots**: Fixed orthogonal representations for independent reasoning
-- **Bilinear Connections**: Learnable slot-to-slot influence matrices
+- **Bilinear Connections**: Learnable slot-to-slot influence matrices with low-rank structure
 - **Adaptive Reasoning**: Dynamic number of reasoning steps until convergence
-- **Orthogonal Regularization**: Ensures connection matrix orthogonality
-- **Systematic Result Management**: Automated experiment tracking and analysis
+- **Encoder-Decoder Structure**: Standard sequence-to-sequence architecture
+- **Orthogonal Regularization**: Ensures connection matrix structure and interpretability
 
 ### Encoder-Decoder Architecture
 
-- **Encoder**: Input → Semantic slots → Bilinear reasoning
-- **Decoder**: Standard Transformer decoder with cross-attention to semantic slots
-- **Fair Comparison**: Parameter-matched baseline Transformer
+- **Encoder**: Source sequence → Semantic slots → Adaptive bilinear reasoning
+- **Decoder**: Standard Transformer decoder with semantic slots as memory
+- **Fair Comparison**: Parameter-matched baseline Transformer for direct comparison
 
 ## 🚀 Quick Start
 
@@ -38,443 +36,278 @@ pip install torch transformers datasets matplotlib seaborn pandas
 ### Basic Usage
 
 ```bash
-# Quick test (recommended first run)
-python main.py --dataset strategyqa --model connection --model_size micro --dry_run
+# Quick system verification (recommended first run)
+python final_verification.py --quick
 
-# Small dataset training with automatic analysis
+# Small dataset training
 python main.py --dataset strategyqa --model connection --model_size micro
 
-# Medium dataset
-python main.py --dataset logiqa --model connection --model_size small
-
-# Large dataset
-python main.py --dataset multinli --model connection --model_size base
-
 # Baseline comparison
-python main.py --dataset multinli --model baseline --model_size base
+python main.py --dataset strategyqa --model baseline --model_size micro
 
-# Skip automatic analysis (faster)
-python main.py --dataset strategyqa --model connection --skip_analysis
+# Run comprehensive experiments
+./run_experiments.sh strategyqa
+
+# Analyze all results
+python analyze_results.py --output_dir ./outputs
 ```
 
 ## 📊 Datasets & Model Sizes
 
 ### Supported Datasets
 
-- **StrategyQA**: Yes/No reasoning (2.8K samples)
-- **LogiQA**: Multiple-choice logic (8K samples)
-- **GSM8K**: Math word problems (8.8K samples)
-- **MultiNLI**: Natural Language Inference (433K samples)
+| Dataset    | Task Type                  | Size     | Metrics                        |
+| ---------- | -------------------------- | -------- | ------------------------------ |
+| StrategyQA | Yes/No reasoning           | 2.8K     | Exact Match (Yes/No)           |
+| LogiQA     | Multiple-choice logic      | 8K       | Exact Match (A/B/C/D)          |
+| GSM8K      | Math word problems         | 8.8K     | Exact Match (numerical answer) |
+| MultiNLI   | Natural Language Inference | 433K     | Exact Match (ent/neu/con)      |
+| ELI5       | Explain Like I'm 5         | Variable | ROUGE-L based accuracy         |
+| CommonGen  | Concept-to-text generation | Variable | ROUGE-L based accuracy         |
 
 ### Model Sizes
 
-| Size    | d_model | num_slots | bilinear_rank | Use Case              |
-| ------- | ------- | --------- | ------------- | --------------------- |
-| micro   | 64      | 16        | 4             | Quick experiments     |
-| x-small | 128     | 32        | 8             | Small-medium datasets |
-| small   | 192     | 48        | 12            | Medium datasets       |
-| base    | 256     | 64        | 16            | Large datasets        |
-| large   | 512     | 128       | 32            | Research experiments  |
+| Size  | d_model | num_slots | bilinear_rank | decoder_layers | Use Case             |
+| ----- | ------- | --------- | ------------- | -------------- | -------------------- |
+| micro | 128     | 2048      | 1             | 4              | Quick experiments    |
+| small | 256     | 256       | 1             | 5              | Medium datasets      |
+| base  | 512     | 512       | 1             | 6              | Large datasets       |
+| large | 768     | 768       | 1             | 6              | Research experiments |
 
-## 🔧 Improved Project Structure
+## 📈 Experimental Results
+
+### Initial Comparison (Large Model, No Parameter Balancing)
+
+**Model Parameters:**
+
+- Connection Transformer: **133,784,064 parameters**
+- Baseline Transformer: **173,360,640 parameters**
+
+| Dataset    | Connection | Baseline | Improvement | Winner        |
+| ---------- | ---------- | -------- | ----------- | ------------- |
+| StrategyQA | 0.5153     | 0.5488   | -3.35pp     | ❌ Baseline   |
+| MultiNLI   | 0.5971     | 0.5881   | +0.90pp     | ✅ Connection |
+| LogiQA     | 0.4028     | 0.2412   | +16.16pp    | ✅ Connection |
+| GSM8K      | 0.0324     | 0.0347   | -0.23pp     | ❌ Baseline   |
+| ELI5       | 0.0065     | 0.0126   | -0.61pp     | ❌ Baseline   |
+| CommonGen  | 0.3629     | 0.3604   | +0.25pp     | ✅ Connection |
+
+**Summary:**
+
+- **Connection wins: 3/6 datasets (50%)**
+- **Notable strength**: Logic reasoning (LogiQA +16.16pp improvement)
+- **Parameter efficiency**: Connection uses 23% fewer parameters
+- **Best performance**: LogiQA reasoning tasks show clear advantage
+
+### Accuracy Calculation Methods
+
+The accuracy calculation varies by dataset type to ensure fair evaluation:
+
+```python
+# Classification tasks (StrategyQA, LogiQA, MultiNLI)
+accuracy = exact_string_match(predicted_answer, ground_truth)
+
+# Mathematical tasks (GSM8K)
+accuracy = numerical_equivalence(extract_number(prediction), extract_number(target))
+
+# Generation tasks (ELI5, CommonGen)
+accuracy = rouge_l_score(prediction, target) >= 0.3  # ROUGE-L threshold
+```
+
+**Dataset-specific extraction:**
+
+- **StrategyQA**: First word → "Yes"/"No"
+- **LogiQA**: First character → "A"/"B"/"C"/"D"
+- **MultiNLI**: First word → "entailment"/"neutral"/"contradiction"
+- **GSM8K**: Extract final numerical answer from solution
+- **ELI5/CommonGen**: Full text with ROUGE-L similarity matching
+
+## 🔧 Project Structure
 
 ```
 connection-transformer/
 ├── models/
-│   ├── connection_transformer.py    # Novel architecture
+│   ├── connection_transformer.py    # Novel architecture implementation
 │   └── baseline_transformer.py     # Parameter-matched baseline
 ├── configs/
 │   ├── base_config.py              # Unified configuration system
-│   └── *_config.py                 # Dataset-specific configs
+│   └── {dataset}_config.py         # Dataset-specific optimizations
 ├── dataset/
-│   ├── base_dataset.py             # Abstract base class
+│   ├── base_dataset.py             # Abstract base for all datasets
 │   ├── tokenizer_utils.py          # T5 tokenizer integration
-│   └── *_dataset.py                # Dataset implementations
+│   └── {dataset}_dataset.py        # Individual dataset implementations
 ├── training/
-│   ├── trainer.py                  # Streamlined trainer
-│   └── data_collator.py            # T5 data collation
-├── utils/                          # All implementation logic
-│   ├── result_manager.py           # Experiment management
-│   ├── visualization_manager.py    # Chart generation
+│   ├── trainer.py                  # Unified training loop
+│   └── data_collator.py            # T5-style data collation
+├── utils/
+│   ├── result_manager.py           # Experiment file organization
 │   ├── comparison_analyzer.py      # Cross-experiment analysis
-│   └── metrics.py                  # Evaluation metrics
-├── outputs/                        # Organized results
+│   ├── visualization_manager.py    # Chart and plot generation
+│   └── metrics.py                  # Evaluation functions
+├── outputs/                        # Auto-organized results
 │   ├── experiments/                # Training-time files
 │   ├── analysis/                   # Post-training analysis
 │   └── comparisons/                # Cross-experiment comparisons
-└── main.py                         # Experiment runner with auto-analysis
+├── main.py                         # Single experiment runner
+├── run_experiments.sh              # Batch experiment runner
+├── analyze_results.py              # Results analysis tool
+└── final_verification.py           # System verification tool
 ```
 
-## 📁 Systematic Result Organization
+## 📁 Result Organization
 
-### File Structure
+The system automatically organizes results with timestamps and clear separation:
 
 ```
 outputs/
-├── experiments/                     # Training-time files
-│   └── {timestamp}_{model}_{dataset}_{size}/
+├── experiments/                     # Training-time data
+│   └── {YYYYMMDD_HHMM}_{model}_{dataset}_{size}/
 │       ├── config.json             # Experiment configuration
-│       ├── model_best.pt           # Best model checkpoint
+│       ├── model_best.pt           # Best checkpoint (w/ parameter count)
 │       ├── training_log.txt        # Real-time training log
-│       └── metrics.json            # Live metrics updates
+│       └── metrics.json            # Training metrics history
 ├── analysis/                       # Post-training analysis
-│   └── {timestamp}_{model}_{dataset}_{size}/
-│       ├── report.md               # Comprehensive report
-│       ├── summary.json            # Machine-readable summary
-│       ├── final_curves.png        # Training curves
+│   └── {YYYYMMDD_HHMM}_{model}_{dataset}_{size}/
+│       ├── report.md               # Comprehensive analysis report
+│       ├── summary.json            # Machine-readable results
+│       ├── training_curves.png     # Loss and accuracy plots
 │       ├── connection_matrix.png   # Connection analysis (Connection only)
-│       └── accuracy_breakdown.png  # Performance analysis
+│       └── accuracy_summary.png    # Performance breakdown
 └── comparisons/                    # Cross-experiment analysis
-    └── {timestamp}_comparison/
-        ├── comparison_table.csv    # All experiments comparison
+    └── {YYYYMMDD_HHMM}_comparison/
+        ├── comparison_table.csv    # All experiments tabulated
         ├── summary_report.md       # Connection vs Baseline analysis
-        ├── dataset_performance.png
-        ├── model_comparison.png
-        └── size_analysis.png
+        ├── dataset_performance.png # Dataset-wise comparison
+        ├── model_comparison.png    # Model-wise statistics
+        └── parameters_analysis.png # Parameter efficiency analysis
 ```
 
-### Naming Convention
+## 🎯 Usage Examples
 
-- **Format**: `{YYYYMMDD_HHMM}_{model}_{dataset}_{size}`
-- **Example**: `20250602_1430_connection_strategyqa_micro`
-- **Benefits**: Chronological sorting, clear identification, archival-friendly
+### Quick Development Workflow
 
-## 🎨 Automated Visualizations
+```bash
+# 1. System verification
+python final_verification.py --quick
 
-### Training-Time Features
+# 2. Single quick experiment
+python main.py --dataset strategyqa --model connection --model_size micro
 
-- **Real-time logging**: Comprehensive training progress tracking
-- **Live metrics**: JSON-based metrics updates during training
-- **Checkpoint management**: Automatic best model saving
+# 3. Compare with baseline
+python main.py --dataset strategyqa --model baseline --model_size micro
 
-### Post-Training Analysis
+# 4. Analyze results
+python analyze_results.py --output_dir ./outputs
+```
 
-- **Training Curves**: Loss, accuracy, and reasoning steps over epochs
-- **Connection Matrix**: Slot-to-slot interaction heatmaps (Connection Transformer)
-- **Accuracy Breakdown**: Detailed performance analysis with sample predictions
-- **Connection Analysis**: Sparsity, orthogonality, and efficiency metrics
+### Comprehensive Evaluation
 
-### Cross-Experiment Comparison
+```bash
+# Run all datasets with appropriate sizes
+./run_experiments.sh
 
-- **Performance Charts**: Dataset-wise and model-wise comparisons
-- **Statistical Analysis**: Win rates, average improvements, distribution plots
-- **Comprehensive Reports**: Markdown reports with actionable insights
+# Or specific dataset comparisons
+./run_experiments.sh strategyqa micro
+./run_experiments.sh multinli base
 
-## 📈 Enhanced Configuration System
+# Large-scale evaluation
+./run_experiments.sh all base
+```
 
-### Flexible Configuration
+### Research Mode
+
+```bash
+# Custom configuration experiments
+python main.py --dataset logiqa --model connection --model_size large
+
+# Skip analysis for faster iteration
+python main.py --dataset strategyqa --model connection --model_size micro --dry_run
+
+# Parameter efficiency study
+./run_experiments.sh all small  # Consistent model size across datasets
+```
+
+## 🔍 Analysis Features
+
+### Automatic Analysis Pipeline
+
+After each training run, the system automatically:
+
+1. **Generates comprehensive visualizations** (training curves, connection matrices)
+2. **Saves structured results** with parameter counts and performance metrics
+3. **Performs cross-experiment comparison** when multiple results exist
+4. **Creates comparative reports** highlighting strengths and weaknesses
+
+### Connection-Specific Analysis
 
 ```python
-# Example: Custom configuration
+# Automatic connection analysis during training
+analysis = model.get_connection_analysis()
+print(f"Sparsity: {analysis['sparsity_ratio']:.3f}")
+print(f"Max connection: {analysis['max_connection']:.3f}")
+print(f"Active connections: {analysis['active_connection_ratio']:.3f}")
+```
+
+### Performance Metrics
+
+```python
+# Dataset-appropriate accuracy calculation
+from utils.metrics import calculate_accuracy
+
+accuracy = calculate_accuracy(predictions, targets, dataset_type)
+# Automatically uses appropriate metric per dataset:
+# - Exact match for classification/math
+# - ROUGE-L for generation tasks
+```
+
+## 💡 Key Features
+
+### Systematic Experiment Management
+
+- **Separated concerns**: Training files vs analysis files clearly separated
+- **Timestamp-based naming**: Chronological organization with clear experiment identification
+- **Parameter tracking**: Automatic parameter counting and efficiency analysis
+- **Error resilience**: Robust handling of training failures and memory issues
+
+### Adaptive Architecture
+
+- **Dynamic reasoning**: Variable reasoning steps based on convergence
+- **Orthogonal regularization**: Structured connection learning
+- **Memory efficiency**: Optimized for single GPU training
+- **Fair comparison**: Parameter-matched baseline for direct evaluation
+
+### Research-Ready Analysis
+
+- **Statistical comparison**: Win rates, improvement percentages, distribution analysis
+- **Visual analysis**: Comprehensive charts and connection visualizations
+- **Archival quality**: Self-contained reports for long-term reference
+- **Programmatic access**: APIs for custom analysis and result processing
+
+## 🛠️ Advanced Configuration
+
+### Custom Model Sizes
+
+```python
 from configs.base_config import BaseConfig
 
 # Method chaining for clean configuration
 config = BaseConfig() \
     .set_size("small") \
-    .set_dataset("strategyqa", num_epochs=5, learning_rate=2e-4) \
-    .update(orthogonal_weight=0.05, max_reasoning_steps=3)
-```
-
-### Size Configurations
-
-```python
-# Available sizes with automatic parameter scaling
-sizes = ["micro", "x-small", "small", "base", "large"]
-
-# Each size automatically configures:
-# - Model dimensions (d_model, num_slots, bilinear_rank)
-# - Training parameters (batch_size, learning_rate)
-# - Sequence lengths and reasoning steps
+    .set_dataset("strategyqa", num_epochs=3, learning_rate=2e-4) \
+    .update(orthogonal_weight=0.02, max_reasoning_steps=2)
 ```
 
 ### Dataset-Specific Optimizations
 
+Each dataset has optimized defaults:
+
 ```python
-# Automatic dataset optimization
-dataset_configs = {
-    "strategyqa": {"task_prefix": "strategy", "answer_max_length": 8},
-    "logiqa": {"task_prefix": "reason", "answer_max_length": 16},
-    "gsm8k": {"task_prefix": "solve", "answer_max_length": 32},
-    "multinli": {"task_prefix": "infer", "answer_max_length": 16}
+dataset_defaults = {
+    "strategyqa": {"answer_max_length": 8, "batch_size": 16},
+    "logiqa": {"answer_max_length": 16, "max_seq_len": 384},
+    "gsm8k": {"answer_max_length": 128, "max_seq_len": 512},
+    "multinli": {"answer_max_length": 16, "batch_size": 64}
 }
-```
-
-## 🔍 Automatic Analysis Pipeline
-
-### Training Completion
-
-After each training run, the system automatically:
-
-1. **Generates final analysis** with comprehensive visualizations
-2. **Saves structured results** in JSON and Markdown formats
-3. **Performs cross-experiment comparison** if multiple experiments exist
-4. **Creates comparison reports** highlighting Connection vs Baseline performance
-
-### Analysis Features
-
-- **Win Rate Analysis**: How often Connection Transformer outperforms Baseline
-- **Improvement Metrics**: Percentage point improvements across datasets
-- **Statistical Significance**: Distribution plots and confidence analysis
-- **Archival Reports**: Self-contained analysis for long-term reference
-
-### Sample Analysis Output
-
-```
-🔍 자동 비교 분석 시작...
-📊 4개 실험 발견
-💾 비교 테이블: comparison_table.csv
-📊 데이터셋 성능 차트 저장
-📈 모델 비교 차트 저장
-📏 크기 분석 차트 저장
-📋 요약 리포트 저장: summary_report.md
-
-📊 비교 분석 완료!
-   총 실험: 4개
-   최고 성능: 0.7250
-   결과 위치: outputs/comparisons/20250602_1445_comparison
-```
-
-## 🎯 Automated Experiment Runner
-
-### Quick Batch Experiments
-
-```bash
-# Make script executable
-chmod +x run_experiments.sh
-
-# Run all datasets with optimal sizes
-./run_experiments.sh
-
-# Single dataset with default size
-./run_experiments.sh strategyqa
-
-# Single dataset with specific size
-./run_experiments.sh multinli base
-
-# All datasets with same size
-./run_experiments.sh all micro
-```
-
-### Experiment Script Features
-
-- **Smart Defaults**: Automatically selects optimal model sizes per dataset
-- **Flexible Arguments**: Support for specific datasets and model sizes
-- **Error Resilience**: Continues other experiments if one fails
-- **Automatic Analysis**: Runs comprehensive comparison after all experiments
-- **Progress Tracking**: Clear status updates for each experiment
-
-### Default Model Sizes
-
-| Dataset    | Default Size | Reasoning                    |
-| ---------- | ------------ | ---------------------------- |
-| StrategyQA | micro        | Small dataset, quick tests   |
-| LogiQA     | small        | Medium complexity reasoning  |
-| GSM8K      | small        | Mathematical reasoning tasks |
-| MultiNLI   | base         | Large dataset, full capacity |
-
-### Sample Output
-
-```bash
-🚀 Connection Transformer Experiments
-=====================================
-📊 Dataset: all
-📏 Model Size: default
-
-🔍 Quick verification...
-✅ System ready!
-
-📊 Dataset: strategyqa (size: micro)
---------------------------------
-🔄 Running: strategyqa - connection (micro)
-✅ Completed: strategyqa - connection (micro)
-
-🔄 Running: strategyqa - baseline (micro)
-✅ Completed: strategyqa - baseline (micro)
-
-📈 Running final analysis...
-============================
-🎉 Analysis Complete!
-📊 Total experiments: 8
-🏆 Best accuracy: 0.7250
-📁 Results: output/comparisons/20250602_1445_comparison
-```
-
-## 💡 Usage Examples
-
-### Batch Experiments
-
-```bash
-# Quick comparison across all datasets
-./run_experiments.sh
-
-# Development workflow
-./run_experiments.sh strategyqa micro  # Quick test
-./run_experiments.sh logiqa small      # Medium test
-./run_experiments.sh multinli base     # Full test
-
-# Research experiments
-./run_experiments.sh all small         # Consistent comparison
-./run_experiments.sh all base          # Full-scale evaluation
-```
-
-### Single Experiments
-
-```bash
-# Quick test (recommended first run)
-python main.py --dataset strategyqa --model connection --model_size micro --dry_run
-
-# Small dataset training with automatic analysis
-python main.py --dataset strategyqa --model connection --model_size micro
-
-# Medium dataset
-python main.py --dataset logiqa --model connection --model_size small
-
-# Large dataset
-python main.py --dataset multinli --model connection --model_size base
-
-# Baseline comparison
-python main.py --dataset multinli --model baseline --model_size base
-
-# Skip automatic analysis (faster)
-python main.py --dataset strategyqa --model connection --skip_analysis
-```
-
-## 🎯 Key Improvements
-
-### Experiment Management
-
-- **Separated file creation**: Training vs analysis files clearly separated
-- **Systematic naming**: Consistent, archive-friendly naming convention
-- **Reduced I/O overhead**: No visualization during training, batch creation after
-- **Automatic analysis**: No need to run separate analysis scripts
-
-### Visualization Quality
-
-- **Information density**: More informative charts with better design
-- **Focused analysis**: Only essential visualizations, higher quality
-- **Connection-specific**: Specialized analysis for Connection Transformer features
-- **Cross-experiment**: Comparative analysis across multiple runs
-
-### Code Organization
-
-- **Utils-based implementation**: All logic in utils/, other files just use them
-- **Modular design**: Easy to extend with new analysis features
-- **Clean interfaces**: Simple, consistent APIs across modules
-- **Error resilience**: Robust error handling and fallback mechanisms
-
-## 🔬 Research Applications
-
-This implementation supports research into:
-
-- **Adaptive reasoning** mechanisms with automatic step tracking
-- **Bilinear connection** learning and sparsity pattern analysis
-- **Orthogonal regularization** effects with quantitative monitoring
-- **Parameter efficiency** through systematic baseline comparisons
-- **Slot-based reasoning** with detailed connection visualization
-
-## 🛠️ Advanced Features
-
-### Connection Analysis
-
-```python
-# Automatic connection analysis during training
-analysis = model.get_connection_analysis()
-# Returns: sparsity_ratio, max_connection, orthogonality_quality
-```
-
-### Custom Metrics
-
-```python
-# Enhanced metrics with breakdown analysis
-from utils.metrics import get_accuracy_breakdown
-
-breakdown = get_accuracy_breakdown(predictions, targets, "strategyqa")
-# Returns: accuracy, correct count, individual sample analysis
-```
-
-### Programmatic Access
-
-```python
-# Access comparison results programmatically
-from utils.comparison_analyzer import ComparisonAnalyzer
-
-analyzer = ComparisonAnalyzer("./outputs")
-summary = analyzer.get_comparison_summary()
-# Returns: status, total_experiments, best_accuracy, etc.
-```
-
-## 📊 Sample Results
-
-### Training Output
-
-```
-🚀 Connection Transformer Experiment
-   Dataset: strategyqa
-   Model: connection
-   Size: micro
-   Output: outputs
-📋 설정 저장: config.json
-🚀 Training 3 epochs
-
-Epoch 1/3
-  Train Loss: 1.2340
-  Eval Loss:  1.1890
-  Accuracy:   0.4500
-  Avg Steps:  2.1
-  💾 New best: 0.4500
-
-Epoch 2/3
-  Train Loss: 0.8760
-  Eval Loss:  0.8234
-  Accuracy:   0.6250
-  Avg Steps:  1.8
-  💾 New best: 0.6250
-
-✅ Training completed! Best accuracy: 0.6250
-📊 최종 분석 시작...
-📋 리포트 생성: report.md
-📊 시각화 완료
-💾 요약 저장: summary.json
-✅ 분석 완료: outputs/analysis/20250602_1430_connection_strategyqa_micro
-
-🔍 자동 비교 분석 시작...
-📊 비교 분석 완료!
-   총 실험: 2개
-   최고 성능: 0.6250
-   결과 위치: outputs/comparisons/20250602_1432_comparison
-```
-
-### Development and Debugging
-
-```bash
-# Quick test with minimal resources
-python main.py --dataset strategyqa --model connection --model_size micro --dry_run
-
-# Training with detailed logging
-python main.py --dataset strategyqa --model connection --model_size micro
-
-# Check real-time progress
-tail -f outputs/experiments/*/training_log.txt
-
-# Skip automatic analysis for faster iteration
-python main.py --dataset strategyqa --model connection --skip_analysis
-```
-
-### Research Workflow
-
-```bash
-# 1. Quick system verification
-./run_experiments.sh strategyqa micro
-
-# 2. Comprehensive comparison
-./run_experiments.sh all
-
-# 3. Check results
-ls outputs/comparisons/
-cat outputs/comparisons/*/summary_report.md
-
-# 4. Custom experiments
-python main.py --dataset gsm8k --model connection --model_size base
 ```
 
 ## 🚨 Troubleshooting
@@ -485,76 +318,48 @@ python main.py --dataset gsm8k --model connection --model_size base
 
    ```bash
    # Use smaller model size
-   ./run_experiments.sh strategyqa micro
-   # Or run individual experiments
    python main.py --dataset strategyqa --model connection --model_size micro
    ```
 
-2. **Script Permission Denied**
+2. **Import Errors**
 
    ```bash
-   # Make script executable
-   chmod +x run_experiments.sh
+   # Run system verification
+   python final_verification.py
    ```
 
-3. **Experiment Failures**
-
+3. **Analysis Failures**
    ```bash
-   # Run verification first
-   python main.py --dataset strategyqa --model connection --dry_run
-   # Check individual components
-   ./run_experiments.sh strategyqa micro
-   ```
-
-4. **Analysis Failures**
-
-   ```bash
-   # Skip automatic analysis and run manually
-   python main.py --dataset strategyqa --model connection --skip_analysis
-   ```
-
-5. **File Permission Issues**
-   ```bash
-   # Check outputs directory permissions
-   chmod -R 755 outputs/
-   rm -rf outputs/  # Clean start if needed
+   # Run analysis separately
+   python analyze_results.py --output_dir ./outputs
    ```
 
 ### Performance Tips
 
-- **Start small**: Use `micro` model size for initial experiments
-- **Use batch script**: `./run_experiments.sh` handles everything automatically
-- **Monitor progress**: Check `outputs/experiments/*/training_log.txt` for detailed progress
-- **Development mode**: Use `--skip_analysis` for faster iteration during development
-- **Memory management**: Kill other GPU processes before large experiments
+- **Start small**: Use `micro` size for initial experiments
+- **Monitor memory**: Check GPU memory with `nvidia-smi`
+- **Use batch scripts**: `./run_experiments.sh` handles complex workflows automatically
+- **Check logs**: Monitor `outputs/experiments/*/training_log.txt` for detailed progress
 
-### Quick Diagnostics
+## 📊 Future Improvements
 
-```bash
-# System check
-python main.py --dataset strategyqa --model connection --model_size micro --dry_run
+Based on initial results:
 
-# Memory check
-nvidia-smi  # Check GPU memory
-
-# Batch experiment check
-./run_experiments.sh strategyqa micro  # Single dataset test
-
-# Output verification
-ls outputs/experiments/  # Check experiment files
-ls outputs/analysis/     # Check analysis results
-ls outputs/comparisons/  # Check comparison results
-```
+1. **Parameter Balancing**: Implement automatic parameter matching between Connection and Baseline
+2. **Architecture Tuning**: Optimize bilinear rank and slot count for different reasoning types
+3. **Task-Specific Adaptation**: Fine-tune connection patterns for mathematical vs logical reasoning
+4. **Efficiency Optimization**: Reduce parameter count while maintaining performance advantages
 
 ## 📄 Citation
 
-If you use this implementation in your research, please cite:
+If you use this implementation in your research:
 
 ```bibtex
-@misc{connection-transformer,
+@misc{connection-transformer-2024,
   title={Connection Transformer: Bilinear Slot-to-Slot Connections for Adaptive Reasoning},
   author={[Your Name]},
   year={2024},
+  note={Implementation with systematic experiment management},
   url={https://github.com/[your-repo]/connection-transformer}
 }
 ```
@@ -562,16 +367,3 @@ If you use this implementation in your research, please cite:
 ## 📝 License
 
 MIT License - see LICENSE file for details.
-
-## 🤝 Contributing
-
-1. **Test your changes**: Run with `--dry_run` first
-2. **Verify analysis**: Ensure visualizations generate correctly
-3. **Check file structure**: Follow the organized output structure
-4. **Document changes**: Update relevant configuration or analysis features
-
-For questions or issues, please include:
-
-- Command used and model configuration
-- Training logs from `outputs/experiments/*/training_log.txt`
-- Error messages and system information

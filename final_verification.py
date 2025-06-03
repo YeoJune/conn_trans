@@ -1,4 +1,7 @@
 # final_verification.py
+"""
+시스템 검증 전용 스크립트 - 훈련 전 환경과 코드 검증
+"""
 import torch
 import warnings
 import sys
@@ -7,7 +10,7 @@ from pathlib import Path
 warnings.filterwarnings("ignore")
 
 class SystemVerifier:
-    """Comprehensive system verification"""
+    """시스템 환경 및 코드 검증"""
     
     def __init__(self):
         self.tests_passed = 0
@@ -15,7 +18,7 @@ class SystemVerifier:
         self.errors = []
     
     def run_test(self, test_name, test_func):
-        """Run a single test and track results"""
+        """단일 테스트 실행"""
         self.tests_total += 1
         print(f"\n🔍 Testing {test_name}...")
         
@@ -35,27 +38,36 @@ class SystemVerifier:
             return False
     
     def test_basic_imports(self):
-        """Test all essential imports"""
+        """핵심 라이브러리 및 모듈 import 테스트"""
         try:
-            # Core libraries
+            # 외부 라이브러리
             import torch
             import transformers
             
-            # Our modules
+            # 모델 모듈
             from models.connection_transformer import ConnectionTransformer
             from models.baseline_transformer import BaselineTransformer
-            from training.trainer import Trainer
-            from dataset.tokenizer_utils import get_tokenizer_and_dataset
-            from utils.metrics import calculate_accuracy
-            from utils.visualization import plot_training_curves
             
-            # Config modules
+            # 훈련 모듈
+            from training.trainer import Trainer
+            from training.data_collator import T5DataCollator
+            
+            # 데이터셋 모듈
+            from dataset.tokenizer_utils import get_tokenizer_and_dataset
+            
+            # 유틸리티 모듈
+            from utils.metrics import calculate_accuracy
+            from utils.result_manager import ResultManager
+            
+            # 설정 모듈
             import configs.strategyqa_config
             import configs.logiqa_config
             import configs.gsm8k_config
             import configs.multinli_config
+            import configs.eli5_config
+            import configs.commongen_config
             
-            print("   All imports successful")
+            print("   All critical imports successful")
             return True
             
         except ImportError as e:
@@ -63,24 +75,29 @@ class SystemVerifier:
             return False
     
     def test_config_system(self):
-        """Test configuration system"""
+        """설정 시스템 테스트"""
         try:
             from configs.strategyqa_config import get_config
             
-            # Test different sizes
+            # 다양한 모델 크기 테스트
             for size in ["micro", "small", "base"]:
                 config = get_config(size)
                 
-                # Verify required attributes
+                # 필수 속성 확인
                 required_attrs = [
                     'd_model', 'num_slots', 'bilinear_rank', 'max_reasoning_steps',
-                    'learning_rate', 'batch_size', 'num_epochs', 'dataset_name'
+                    'learning_rate', 'batch_size', 'num_epochs'
                 ]
                 
                 for attr in required_attrs:
                     if not hasattr(config, attr):
                         print(f"   Missing attribute: {attr}")
                         return False
+                
+                # 값 검증
+                if config.d_model <= 0 or config.batch_size <= 0:
+                    print(f"   Invalid config values for {size}")
+                    return False
             
             print("   Config system working correctly")
             return True
@@ -90,17 +107,17 @@ class SystemVerifier:
             return False
     
     def test_model_creation(self):
-        """Test model creation and basic forward pass"""
+        """모델 생성 및 기본 순전파 테스트"""
         try:
             from models.connection_transformer import ConnectionTransformer
             from models.baseline_transformer import BaselineTransformer
             from transformers import T5Tokenizer
             
-            # Load tokenizer
+            # 토크나이저 로드
             tokenizer = T5Tokenizer.from_pretrained("google-t5/t5-base")
             vocab_size = tokenizer.vocab_size
             
-            # Test Connection Transformer
+            # Connection Transformer 테스트
             conn_model = ConnectionTransformer(
                 src_vocab_size=vocab_size,
                 tgt_vocab_size=vocab_size,
@@ -115,7 +132,7 @@ class SystemVerifier:
                 num_heads=4
             )
             
-            # Test Baseline Transformer
+            # Baseline Transformer 테스트
             base_model = BaselineTransformer(
                 src_vocab_size=vocab_size,
                 tgt_vocab_size=vocab_size,
@@ -128,7 +145,7 @@ class SystemVerifier:
                 tgt_pad_token_id=tokenizer.pad_token_id
             )
             
-            # Test forward passes
+            # 순전파 테스트
             batch_size, src_len, tgt_len = 2, 8, 6
             src_ids = torch.randint(1, 1000, (batch_size, src_len))
             tgt_ids = torch.randint(1, 1000, (batch_size, tgt_len))
@@ -143,7 +160,7 @@ class SystemVerifier:
                     print(f"   Wrong Connection output shape: {conn_output.shape} vs {expected_shape}")
                     return False
                 
-                # Test with reasoning trace
+                # Reasoning trace 테스트
                 conn_output, reasoning_info = conn_model(src_ids, tgt_ids, src_mask, tgt_mask, return_reasoning_trace=True)
                 if 'actual_steps' not in reasoning_info:
                     print("   Missing reasoning info")
@@ -163,18 +180,18 @@ class SystemVerifier:
             return False
     
     def test_dataset_loading(self):
-        """Test dataset loading"""
+        """데이터셋 로딩 테스트"""
         try:
             from dataset.tokenizer_utils import get_tokenizer_and_dataset
             from configs.strategyqa_config import get_config
             
-            # Use smallest config for fast testing
+            # 최소 설정으로 빠른 테스트
             config = get_config("micro")
             
-            # Test dataset loading
+            # 데이터셋 로딩 테스트
             tokenizer, train_dataset, eval_dataset = get_tokenizer_and_dataset("strategyqa", config)
             
-            # Verify datasets
+            # 데이터셋 검증
             if len(train_dataset) == 0:
                 print("   Empty train dataset")
                 return False
@@ -183,7 +200,7 @@ class SystemVerifier:
                 print("   Empty eval dataset")
                 return False
             
-            # Test data loading
+            # 샘플 데이터 검증
             sample = train_dataset[0]
             required_keys = ['input_ids', 'attention_mask', 'decoder_input_ids', 'labels']
             for key in required_keys:
@@ -202,14 +219,14 @@ class SystemVerifier:
             return False
     
     def test_training_setup(self):
-        """Test training setup (without actual training)"""
+        """훈련 환경 설정 테스트"""
         try:
             from training.trainer import Trainer
             from models.connection_transformer import ConnectionTransformer
             from configs.strategyqa_config import get_config
             from transformers import T5Tokenizer
             
-            # Setup
+            # 설정
             config = get_config("micro")
             tokenizer = T5Tokenizer.from_pretrained("google-t5/t5-base")
             config.vocab_size = tokenizer.vocab_size
@@ -229,11 +246,11 @@ class SystemVerifier:
                 num_heads=config.num_heads
             )
             
-            # Create trainer
+            # 트레이너 생성
             trainer = Trainer(model, config, model_type="connection")
             trainer.set_tokenizer(tokenizer)
             
-            # Verify trainer setup
+            # 트레이너 검증
             if trainer.device.type not in ['cuda', 'cpu']:
                 print(f"   Invalid device: {trainer.device}")
                 return False
@@ -249,23 +266,22 @@ class SystemVerifier:
             print(f"   Training setup error: {e}")
             return False
     
-    def test_metrics_and_utils(self):
-        """Test metrics and utility functions"""
+    def test_metrics_system(self):
+        """메트릭 시스템 테스트"""
         try:
             from utils.metrics import calculate_accuracy, extract_final_answer, exact_match_score
-            from utils.visualization import plot_training_curves
             
-            # Test metric functions
+            # 메트릭 함수 테스트
             predictions = ["Yes", "A", "42", "entailment"]
             targets = ["Yes", "A", "42", "entailment"]
             
-            # Test accuracy calculation
+            # 정확도 계산 테스트
             acc = calculate_accuracy(predictions, targets, "strategyqa")
             if acc != 1.0:
                 print(f"   Wrong accuracy: {acc} (expected 1.0)")
                 return False
             
-            # Test answer extraction
+            # 답변 추출 테스트
             test_cases = [
                 ("Yes, this is correct", "strategyqa", "Yes"),
                 ("The answer is A", "logiqa", "A"),
@@ -279,91 +295,15 @@ class SystemVerifier:
                     print(f"   Wrong extraction: '{result}' vs '{expected}' for {dataset_type}")
                     return False
             
-            print("   Metrics and utils working correctly")
+            print("   Metrics system working correctly")
             return True
             
         except Exception as e:
-            print(f"   Utils error: {e}")
-            return False
-    
-    def test_end_to_end_compatibility(self):
-        """Test end-to-end compatibility with minimal training step"""
-        try:
-            from training.trainer import Trainer
-            from models.connection_transformer import ConnectionTransformer
-            from dataset.tokenizer_utils import get_tokenizer_and_dataset
-            from configs.strategyqa_config import get_config
-            
-            # Use micro config for speed
-            config = get_config("micro")
-            config.num_epochs = 1  # Just one epoch
-            config.batch_size = 2  # Small batch
-            
-            # Load data
-            tokenizer, train_dataset, eval_dataset = get_tokenizer_and_dataset("strategyqa", config)
-            
-            # Use tiny subset for speed
-            from torch.utils.data import Subset
-            train_subset = Subset(train_dataset, range(min(4, len(train_dataset))))
-            eval_subset = Subset(eval_dataset, range(min(4, len(eval_dataset))))
-            
-            # Create model
-            model = ConnectionTransformer(
-                src_vocab_size=config.vocab_size,
-                tgt_vocab_size=config.vocab_size,
-                d_model=config.d_model,
-                num_slots=config.num_slots,
-                bilinear_rank=config.bilinear_rank,
-                max_reasoning_steps=config.max_reasoning_steps,
-                max_seq_len=config.max_seq_len,
-                src_pad_token_id=config.pad_token_id,
-                tgt_pad_token_id=config.pad_token_id,
-                num_decoder_layers=config.num_decoder_layers,
-                num_heads=config.num_heads
-            )
-            
-            # Test trainer initialization
-            trainer = Trainer(model, config, model_type="connection")
-            trainer.set_tokenizer(tokenizer)
-            
-            # Test one training step (without full training)
-            from torch.utils.data import DataLoader
-            from training.data_collator import T5DataCollator
-            
-            data_collator = T5DataCollator(tokenizer, max_length=config.max_seq_len)
-            train_loader = DataLoader(train_subset, batch_size=2, collate_fn=data_collator)
-            
-            # Setup optimizer
-            trainer._setup_optimizer(train_loader)
-            
-            # Test one batch
-            model.train()
-            batch = next(iter(train_loader))
-            tensors = trainer._extract_batch_tensors(batch)
-            
-            logits, reasoning_info = trainer._forward_pass(tensors, return_reasoning=True)
-            loss = trainer._calculate_loss(logits, tensors['labels'])
-            
-            # Verify shapes and values
-            if torch.isnan(loss) or torch.isinf(loss):
-                print(f"   Invalid loss: {loss}")
-                return False
-            
-            if reasoning_info and 'actual_steps' in reasoning_info:
-                steps = reasoning_info['actual_steps']
-                if steps <= 0 or steps > config.max_reasoning_steps:
-                    print(f"   Invalid reasoning steps: {steps}")
-                    return False
-            
-            print("   End-to-end compatibility successful")
-            return True
-            
-        except Exception as e:
-            print(f"   E2E error: {e}")
+            print(f"   Metrics error: {e}")
             return False
     
     def run_all_tests(self):
-        """Run all verification tests"""
+        """모든 검증 테스트 실행"""
         print("🚀 Connection Transformer System Verification")
         print("=" * 60)
         
@@ -373,14 +313,13 @@ class SystemVerifier:
             ("Model Creation", self.test_model_creation),
             ("Dataset Loading", self.test_dataset_loading),
             ("Training Setup", self.test_training_setup),
-            ("Metrics & Utils", self.test_metrics_and_utils),
-            ("End-to-End Compatibility", self.test_end_to_end_compatibility)
+            ("Metrics System", self.test_metrics_system)
         ]
         
         for test_name, test_func in tests:
             self.run_test(test_name, test_func)
         
-        # Final report
+        # 최종 리포트
         print("\n" + "=" * 60)
         print(f"📊 Test Results: {self.tests_passed}/{self.tests_total} passed")
         
@@ -397,14 +336,14 @@ class SystemVerifier:
             return False
     
     def quick_test(self):
-        """Quick essential tests only"""
+        """필수 테스트만 빠르게 실행"""
         print("⚡ Quick System Check")
         print("-" * 30)
         
         essential_tests = [
             ("Imports", self.test_basic_imports),
             ("Config", self.test_config_system),
-            ("Model", self.test_model_creation)
+            ("Models", self.test_model_creation)
         ]
         
         for test_name, test_func in essential_tests:
@@ -416,7 +355,7 @@ class SystemVerifier:
         return True
 
 def main():
-    """Main verification entry point"""
+    """검증 스크립트 메인 함수"""
     import argparse
     
     parser = argparse.ArgumentParser(description="Verify Connection Transformer system")

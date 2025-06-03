@@ -1,5 +1,4 @@
 # configs/strategyqa_config.py
-
 from .base_config import BaseConfig
 
 def get_config(model_size="micro"):

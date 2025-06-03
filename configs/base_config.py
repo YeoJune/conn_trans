@@ -48,7 +48,7 @@ class BaseConfig:
         """모델 크기 설정"""
         sizes = {
             "micro": {
-                "d_model": 128, "num_slots": 2048, "bilinear_rank": 1,
+                "d_model": 128, "num_slots": 128, "bilinear_rank": 1,
                 "max_reasoning_steps": 1, "num_decoder_layers": 4, "num_heads": 4,
                 "max_seq_len": 128, "batch_size": 64, "learning_rate": 2e-4
             },
@@ -108,6 +108,22 @@ class BaseConfig:
                 "batch_size": 64,
                 "learning_rate": 5e-5,     # 큰 데이터셋엔 낮은 lr
                 "early_stopping_patience": 2
+            },
+            "eli5": {
+                "task_prefix": "explain", 
+                "answer_max_length": 200,   # 적절한 길이
+                "max_seq_len": 320,
+                "num_epochs": 6,
+                "batch_size": 12,           # 메모리 고려
+                "learning_rate": 8e-5       # 안정적인 학습률
+            },
+            "commongen": {
+                "task_prefix": "connect", 
+                "answer_max_length": 80,    # 간결한 생성
+                "max_seq_len": 200,
+                "num_epochs": 10,
+                "batch_size": 32,
+                "learning_rate": 1e-4
             }
         }
         
@@ -129,7 +145,7 @@ class BaseConfig:
         return self
 
     def auto_balance(self):
-        """Connection과 Baseline 파라미터 자동 균형화 🔥"""
+        """Connection과 Baseline 파라미터 자동 균형화"""
         vocab_size = self.vocab_size or 32000
         
         # Connection Transformer 파라미터 추정
@@ -158,25 +174,3 @@ class BaseConfig:
                 self.bilinear_rank = max(4, int(self.bilinear_rank * target_ratio**0.5))
         
         return self
-    
-    def update_base_config_datasets():
-        """BaseConfig.set_dataset()에 추가할 설정들"""
-        additional_datasets = {
-            "eli5": {
-                "task_prefix": "explain", 
-                "answer_max_length": 200,   # 🔧 적절한 길이
-                "max_seq_len": 320,
-                "num_epochs": 6,
-                "batch_size": 12,           # 🔧 메모리 고려
-                "learning_rate": 8e-5       # 🔧 안정적인 학습률
-            },
-            "commongen": {
-                "task_prefix": "connect", 
-                "answer_max_length": 80,    # 🔧 간결한 생성
-                "max_seq_len": 200,
-                "num_epochs": 10,
-                "batch_size": 32,
-                "learning_rate": 1e-4
-            }
-        }
-        return additional_datasets

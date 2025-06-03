@@ -87,11 +87,15 @@ class ResultManager:
         else:
             checkpoint_path = self.exp_dir / f"model_epoch_{epoch}.pt"
         
+        # 파라미터 수 계산
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'accuracy': accuracy,
+            'total_parameters': total_params,
             'experiment_id': self.exp_id
         }
         
@@ -110,8 +114,8 @@ class ResultManager:
         # 2. 최종 시각화 생성
         self._generate_final_visualizations(model, predictions, targets)
         
-        # 3. 결과 요약 저장
-        self._save_experiment_summary(best_accuracy, predictions, targets)
+        # 3. 결과 요약 저장 (파라미터 수 포함)
+        self._save_experiment_summary(best_accuracy, model, predictions, targets)
         
         print(f"✅ 분석 완료: {self.analysis_dir}")
         return self.analysis_dir
@@ -119,6 +123,9 @@ class ResultManager:
     def _generate_final_report(self, best_accuracy: float, model):
         """종합 마크다운 리포트 생성"""
         report_path = self.analysis_dir / "report.md"
+        
+        # 파라미터 수 계산
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         
         with open(report_path, 'w') as f:
             f.write(f"# 실험 결과: {self.exp_id}\n\n")
@@ -129,7 +136,8 @@ class ResultManager:
             f.write(f"- **데이터셋**: {self.dataset.upper()}\n")
             f.write(f"- **크기**: {self.model_size}\n")
             f.write(f"- **실행 시간**: {self.timestamp}\n")
-            f.write(f"- **최고 정확도**: {best_accuracy:.4f}\n\n")
+            f.write(f"- **최고 정확도**: {best_accuracy:.4f}\n")
+            f.write(f"- **총 파라미터**: {total_params:,}\n\n")
             
             # 훈련 진행
             f.write("## 📈 훈련 진행\n")
@@ -151,7 +159,6 @@ class ResultManager:
                 if 'orthogonality_quality' in analysis:
                     f.write(f"- **직교성 품질**: {analysis['orthogonality_quality']:.4f}\n")
             
-            total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
             f.write(f"- **총 파라미터**: {total_params:,}\n")
             
             f.write(f"\n## 📁 파일 위치\n")
@@ -187,8 +194,11 @@ class ResultManager:
         except Exception as e:
             print(f"⚠️ 시각화 오류: {str(e)[:50]}...")
     
-    def _save_experiment_summary(self, best_accuracy: float, predictions: List[str], targets: List[str]):
-        """실험 요약 저장"""
+    def _save_experiment_summary(self, best_accuracy: float, model, predictions: List[str], targets: List[str]):
+        """실험 요약 저장 (파라미터 수 포함)"""
+        # 파라미터 수 계산
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        
         summary = {
             'experiment_id': self.exp_id,
             'model_type': self.model_type,
@@ -196,6 +206,7 @@ class ResultManager:
             'model_size': self.model_size,
             'timestamp': self.timestamp,
             'best_accuracy': best_accuracy,
+            'total_parameters': total_params,
             'final_metrics': {
                 'train_loss': self.metrics['train_losses'][-1] if self.metrics['train_losses'] else 0,
                 'eval_loss': self.metrics['eval_losses'][-1] if self.metrics['eval_losses'] else 0,

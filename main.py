@@ -74,34 +74,10 @@ def create_model(model_type, config):
     else:
         raise ValueError(f"Unknown model type: {model_type}")
     
-    # 🔧 Pre-trained weights 로딩
+    # Pre-trained weights 로딩
     model.load_pretrained_weights(config.tokenizer_name)
     
     return model
-
-def run_automatic_analysis(output_dir):
-    """훈련 완료 후 자동 비교 분석 실행"""
-    try:
-        from utils.comparison_analyzer import ComparisonAnalyzer
-        
-        print(f"\n🔍 자동 비교 분석 시작...")
-        analyzer = ComparisonAnalyzer(output_dir)
-        success = analyzer.analyze_all_experiments()
-        
-        if success:
-            summary = analyzer.get_comparison_summary()
-            print(f"\n📊 비교 분석 완료!")
-            print(f"   총 실험: {summary['total_experiments']}개")
-            print(f"   최고 성능: {summary['best_accuracy']:.4f}")
-            print(f"   결과 위치: {summary['comparison_dir']}")
-            return True
-        else:
-            print(f"⚠️ 비교 분석 스킵 (실험 부족)")
-            return False
-            
-    except Exception as e:
-        print(f"⚠️ 자동 분석 오류: {str(e)[:50]}...")
-        return False
 
 def main():
     parser = argparse.ArgumentParser(description="Train Connection Transformer")
@@ -128,9 +104,6 @@ def main():
     parser.add_argument("--dry_run", 
                        action="store_true",
                        help="Just verify setup without training")
-    parser.add_argument("--skip_analysis", 
-                       action="store_true",
-                       help="Skip automatic comparison analysis")
     
     args = parser.parse_args()
     
@@ -138,7 +111,7 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"🚀 Connection Transformer Experiment")
+    print(f"🚀 Connection Transformer Training")
     print(f"   Dataset: {args.dataset}")
     print(f"   Model: {args.model}")
     print(f"   Size: {args.model_size}")
@@ -196,10 +169,6 @@ def main():
         print(f"\n✅ Training completed!")
         print(f"   Best accuracy: {best_accuracy:.4f}")
         print(f"   Results saved in: {output_dir}")
-        
-        # 자동 비교 분석 실행
-        if not args.skip_analysis:
-            run_automatic_analysis(output_dir)
         
         return 0
         

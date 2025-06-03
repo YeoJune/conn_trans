@@ -136,8 +136,3 @@ class LogiQADataset(BaseReasoningDataset):
             print("✅ Answer distribution looks reasonable.")
         
         return answer_dist
-    
-    # logiqa_dataset.py에 추가
-    def _get_answer_max_length(self):
-        """LogiQA는 답변이 짧으므로 길이 조정"""
-        return 4  # "A", "B", "C", "D" + 특수토큰 여유분

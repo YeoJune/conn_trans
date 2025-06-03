@@ -52,7 +52,7 @@ class BaseReasoningDataset(Dataset, ABC):
         for idx, item in enumerate(raw_data):
             try:
                 processed_item = self._process_item(item, idx)
-                if self._is_valid_item(processed_item):
+                if processed_item is not None and self._is_valid_item(processed_item):
                     processed.append(processed_item)
                 else:
                     skipped += 1
