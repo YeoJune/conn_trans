@@ -297,87 +297,57 @@ class ConnectionTransformer(nn.Module):
     
     def orthogonal_regularization_loss(self):
         """
-        의미를 정확히 보존한 직교 정규화
-        목표: 각 W_source[i,j], W_target[i,j] 벡터가 단위벡터이고 서로 직교
+        einsum 기반 효율적 직교 정규화
+        기존 O(N⁴) → O(N² × r²)
         """
         device = self.W_source.device
-
-        # 자기 연결 제외
-        mask = torch.eye(self.num_slots, device=device, dtype=torch.bool)
-
-        total_loss = 0.0
-        num_pairs = 0
-
-        # 🔥 핵심: 의미를 정확히 보존하면서 메모리 효율적으로
-        # 원래 의미: 각 (i,j) 쌍의 벡터들이 단위벡터 + 전체적으로 직교
-
-        # 1단계: 각 벡터가 단위벡터인지 확인 (O(N²) 연산, O(1) 메모리)
-        unit_loss = 0.0
-        for i in range(self.num_slots):
-            for j in range(self.num_slots):
-                if i != j:
-                    source_norm = torch.norm(self.W_source[i, j])
-                    target_norm = torch.norm(self.W_target[i, j])
-                    
-                    unit_loss += (source_norm - 1.0) ** 2
-                    unit_loss += (target_norm - 1.0) ** 2
-                    num_pairs += 2
-
-        unit_loss = unit_loss / num_pairs if num_pairs > 0 else 0.0
-
-        # 2단계: 벡터들 간 직교성 확인 (샘플링으로 근사)
-        ortho_loss = 0.0
-
-        if self.num_slots > 32:  # 큰 N에서만 샘플링
-            # 랜덤하게 일부 쌍만 체크 (의미 근사 보존)
-            sample_pairs = min(1000, self.num_slots * (self.num_slots - 1) // 10)
-            
-            sampled_loss = 0.0
-            for _ in range(sample_pairs):
-                # 랜덤 쌍 선택
-                i1, j1 = torch.randint(0, self.num_slots, (2,))
-                i2, j2 = torch.randint(0, self.num_slots, (2,))
-                
-                if i1 != j1 and i2 != j2 and (i1 != i2 or j1 != j2):
-                    # 서로 다른 연결의 벡터들 간 내적이 0에 가까워야 함
-                    dot_source = torch.dot(self.W_source[i1, j1], self.W_source[i2, j2])
-                    dot_target = torch.dot(self.W_target[i1, j1], self.W_target[i2, j2])
-                    
-                    sampled_loss += dot_source ** 2 + dot_target ** 2
-            
-            ortho_loss = sampled_loss / sample_pairs if sample_pairs > 0 else 0.0
-
-        else:  # 작은 N에서는 정확한 계산
-            W_source_valid = self.W_source[~mask].view(-1, self.bilinear_rank)  # [N*(N-1), r]
-            W_target_valid = self.W_target[~mask].view(-1, self.bilinear_rank)  # [N*(N-1), r]
-            
-            if len(W_source_valid) > 1:
-                # 청크별로 처리하여 메모리 절약
-                chunk_size = min(200, len(W_source_valid))
-                chunk_ortho_loss = 0.0
-                num_chunks = 0
-                
-                for start in range(0, len(W_source_valid), chunk_size):
-                    end = min(start + chunk_size, len(W_source_valid))
-                    chunk_s = W_source_valid[start:end]  # [chunk, r]
-                    chunk_t = W_target_valid[start:end]  # [chunk, r]
-                    
-                    # 청크 내 벡터들 간 직교성
-                    if len(chunk_s) > 1:
-                        gram_s = chunk_s @ chunk_s.T  # [chunk, chunk]
-                        gram_t = chunk_t @ chunk_t.T  # [chunk, chunk]
-                        
-                        # 대각선 제거 (자기 자신과의 내적 제외)
-                        gram_s.fill_diagonal_(0)
-                        gram_t.fill_diagonal_(0)
-                        
-                        chunk_ortho_loss += torch.sum(gram_s ** 2) + torch.sum(gram_t ** 2)
-                        num_chunks += len(chunk_s) * (len(chunk_s) - 1)
-                
-                ortho_loss = chunk_ortho_loss / num_chunks if num_chunks > 0 else 0.0
-
-        # 단위벡터 조건과 직교성 조건 결합
-        return unit_loss + 0.1 * ortho_loss  # 직교성에 낮은 가중치
+        num_slots = self.num_slots
+        
+        # 자기 연결 제거 마스크
+        mask = torch.eye(num_slots, device=device, dtype=torch.bool)
+        
+        # 1. 단위벡터 조건: ||W[i,j]||² = 1
+        # W_source: [N, N, r], W_target: [N, N, r]
+        source_norms = torch.sum(self.W_source ** 2, dim=-1)  # [N, N]
+        target_norms = torch.sum(self.W_target ** 2, dim=-1)  # [N, N]
+        
+        # 자기 연결 제외하고 단위벡터 조건
+        source_unit_loss = torch.mean((source_norms[~mask] - 1.0) ** 2)
+        target_unit_loss = torch.mean((target_norms[~mask] - 1.0) ** 2)
+        
+        # 2. 직교성 조건: <W[i1,j1], W[i2,j2]> = 0 (서로 다른 (i,j) 쌍)
+        # einsum으로 모든 쌍의 내적을 한번에 계산
+        
+        # W_source를 [N*N, r]로 reshape
+        W_s_flat = self.W_source.view(-1, self.bilinear_rank)  # [N*N, r]
+        W_t_flat = self.W_target.view(-1, self.bilinear_rank)  # [N*N, r]
+        
+        # 모든 쌍의 내적: [N*N, N*N]
+        gram_source = torch.einsum('ir,jr->ij', W_s_flat, W_s_flat)  # [N*N, N*N]
+        gram_target = torch.einsum('ir,jr->ij', W_t_flat, W_t_flat)  # [N*N, N*N]
+        
+        # 대각선은 단위벡터 조건(이미 처리), 자기 연결도 제외
+        # 전체 마스크: 대각선 + 자기 연결 위치들
+        flat_mask = mask.view(-1)  # [N*N] - 자기 연결 위치
+        
+        # 전체 직교성 마스크 생성
+        full_mask = torch.eye(num_slots * num_slots, device=device, dtype=torch.bool)  # 대각선
+        
+        # 자기 연결 위치들도 제외 (i1==j1 또는 i2==j2인 경우)
+        for idx in range(num_slots * num_slots):
+            if flat_mask[idx]:  # 자기 연결이면
+                full_mask[idx, :] = True  # 해당 행 전체 마스킹
+                full_mask[:, idx] = True  # 해당 열 전체 마스킹
+        
+        # 직교성 손실 계산
+        source_ortho_loss = torch.mean(gram_source[~full_mask] ** 2)
+        target_ortho_loss = torch.mean(gram_target[~full_mask] ** 2)
+        
+        # 총 손실
+        unit_loss = (source_unit_loss + target_unit_loss) / 2
+        ortho_loss = (source_ortho_loss + target_ortho_loss) / 2
+        
+        return unit_loss + 0.1 * ortho_loss
 
     def get_connection_analysis(self):
         """
